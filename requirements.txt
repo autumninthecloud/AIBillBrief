@@ -1,0 +1,4 @@
+pdfplumber==0.11.4
+snowflake-connector-python==3.12.4
+snowflake-snowpark-python==1.26.0
+pandas==1.4.2
