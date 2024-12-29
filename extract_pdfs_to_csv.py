@@ -36,9 +36,9 @@ def upload_to_snowflake(data, table_name, user, password, account, warehouse, da
     conn = snowflake.connector.connect(
         user="ANRAINS",
         password="Giraffe23!",
-        account="OHWIRCU.KPB31782",
+        account="pib01610",
         warehouse="COMPUTE_WH",
-        database="AR_AI_BILL_SUM",
+        database="SNOW_PDF",
         schema="PUBLIC"
     )
     
