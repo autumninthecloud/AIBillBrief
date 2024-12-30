@@ -1,6 +1,13 @@
 # AI Bill Brief
 
-A Streamlit application that uses Snowflake, Mistral LLM, and AI to process, analyze, and query legislative bills in PDF format. This tool helps users understand and interact with legislative documents more efficiently.
+AI Bill Brief is a revolutionary tool that democratizes access to legislative information by combining the power of Snowflake, Mistral LLM, and advanced AI technologies. This application transforms complex legislative bills into easily digestible insights, making civic engagement more accessible to everyone.
+
+## Impact & Outcomes
+
+- **Accessibility**: Simplifies complex legislative language for the general public, making bills and policies understandable to all citizens
+- **Efficiency**: Reduces the time required to understand proposed bills and policies through AI-powered summaries and natural language queries
+- **Transparency**: Encourages informed civic engagement by making legislative data more accessible and understandable
+- **Democratic Participation**: Empowers citizens to actively participate in the legislative process by better understanding the laws that affect them
 
 ## About
 
