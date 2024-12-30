@@ -3,17 +3,39 @@ from snowflake.core import Root # requires snowflake>=0.8.0
 from snowflake.cortex import Complete
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark import Session
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Define your connection parameters
+# These values are loaded from environment variables
+# Create a .env file with these variables (see .env.example)
 connection_parameters = {
-    "account": "pib01610",
-    "user": "ANRAINS",
-    "password": "Giraffe23!",
-    "role": "accountadmin",  # Add your role here
-    "warehouse": "COMPUTE_WH",
-    "database": "SNOW_PDF",
-    "schema": "PUBLIC"
+    "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+    "user": os.getenv("SNOWFLAKE_USER"),
+    "password": os.getenv("SNOWFLAKE_PASSWORD"),
+    "role": os.getenv("SNOWFLAKE_ROLE"),
+    "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+    "database": os.getenv("SNOWFLAKE_DATABASE"),
+    "schema": os.getenv("SNOWFLAKE_SCHEMA")
 }
+
+# Validate that all required environment variables are set
+required_env_vars = [
+    "SNOWFLAKE_ACCOUNT",
+    "SNOWFLAKE_USER",
+    "SNOWFLAKE_PASSWORD",
+    "SNOWFLAKE_ROLE",
+    "SNOWFLAKE_WAREHOUSE",
+    "SNOWFLAKE_DATABASE",
+    "SNOWFLAKE_SCHEMA"
+]
+
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Create a session
 session = Session.builder.configs(connection_parameters).create()
