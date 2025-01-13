@@ -21,13 +21,27 @@ The competition aims to push the boundaries of AI technology and showcase how RA
 
 ## Features
 
-- PDF Processing: Automatically processes legislative bills in PDF format
-- AI-Powered Search: Uses Snowflake's Cortex framework for intelligent document search
-- Advanced LLM Integration: Leverages Mistral's large language models (including mistral-large2) for sophisticated text analysis
-- Natural Language Queries: Ask questions about bills in plain English
-- Interactive UI: Built with Streamlit for a user-friendly experience
-- Secure Configuration: Environment-based credential management
-- Context-Aware Responses: Maintains chat history for more relevant answers
+- **PDF Processing**: 
+  - Automatic processing of legislative bills
+  - Metadata extraction including date filed, subtitle, and sponsor
+  - Efficient chunking for better context retrieval
+
+- **AI-Powered Search**: 
+  - Uses Snowflake's Cortex framework for intelligent document search
+  - Context-aware retrieval for more relevant results
+  - Maintains chat history for better conversation flow
+
+- **Modern UI/UX**:
+  - Clean, modern interface with custom styling
+  - Centered chat input for better usability
+  - Responsive design with proper spacing
+  - Light purple theme with white chat containers
+
+- **Advanced Features**:
+  - Natural language bill queries
+  - Configurable model selection
+  - Adjustable context chunks
+  - Debug mode for development
 
 ## Technology Stack
 
@@ -35,10 +49,12 @@ This project implements the hackathon's required technology stack:
 - **Retrieval**: Snowflake Cortex Search for efficient document retrieval
 - **Generation**: Mistral LLM (mistral-large2) on Snowflake Cortex for natural language processing
 - **Frontend**: Streamlit for an interactive and user-friendly interface
+- **Data Processing**: PyPDF2 and langchain for PDF processing
+- **Database**: Snowflake for secure and scalable data storage
 
 ## Prerequisites
 
-- Python 3.x
+- Python 3.8 or higher
 - Snowflake account with appropriate permissions
 - Required Python packages (see `requirements.txt`)
 
@@ -85,19 +101,32 @@ streamlit run local_streamlit_app.py
    - Ask natural language questions about bills
    
 4. Advanced Options:
-   - Use mistral-large2 model for optimal performance
-   - Adjust the number of context chunks for search
-   - Toggle chat history for more contextual responses
-   - Enable debug mode for detailed information
+   - Select between different Mistral models
+   - Adjust the number of context chunks
+   - Configure chat history length
+   - Clear conversation history
+   - Enable debug mode
 
 ## Project Structure
 
-- `local_streamlit_app.py`: Main Streamlit application
-- `local_pdf_processor.py`: PDF processing utilities
+- `local_streamlit_app.py`: Main Streamlit application with UI and LLM integration
+- `local_pdf_processor.py`: PDF processing and metadata extraction
 - `requirements.txt`: Python dependencies
 - `.env.example`: Template for environment variables
 - `bills/`: Directory for PDF files
 - `csv_files/`: Output directory for processed files
+
+## Dependencies
+
+Key Python packages:
+- streamlit
+- snowflake-connector-python
+- snowflake-snowpark-python
+- snowflake-cortex
+- PyPDF2
+- langchain
+- pandas
+- python-dotenv
 
 ## Development
 
@@ -115,15 +144,6 @@ The application demonstrates how RAG can be used to make legislative documents m
 - Sensitive credentials are managed through environment variables
 - The `.env` file containing actual credentials is ignored by git
 - Use `.env.example` as a template for setting up your own credentials
-
-## Dependencies
-
-- pdfplumber
-- snowflake-connector-python
-- snowflake-snowpark-python
-- pandas
-- python-dotenv
-- streamlit
 
 ## Contributing
 

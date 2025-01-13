@@ -1,13 +1,41 @@
-import streamlit as st
-from snowflake.core import Root # requires snowflake>=0.8.0
-from snowflake.cortex import Complete
-from snowflake.snowpark.context import get_active_session
-from snowflake.snowpark import Session
 import os
+import streamlit as st
+import pandas as pd
+import traceback
 from dotenv import load_dotenv
+from snowflake.snowpark import Session
+from snowflake.core import Root
+from snowflake.cortex import Complete
+from local_pdf_processor import LocalPDFProcessor
+import json
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Custom CSS to set background color
+st.markdown("""
+    <style>
+        .stApp {
+            background-color: #E6E6FA;  /* Light purple color */
+        }
+        .stChatMessage {
+            background-color: white !important;
+        }
+        /* Style the chat input */
+        .stChatInput {
+            border-radius: 8px !important;
+            background-color: white !important;
+            margin-top: 20px !important;
+            margin-bottom: 20px !important;
+            padding: 10px !important;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1) !important;
+        }
+        /* Add some space after messages */
+        .stChatMessageContent {
+            margin-bottom: 15px !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # Define your connection parameters
 # These values are loaded from environment variables
@@ -37,238 +65,374 @@ missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-# Create a session
-session = Session.builder.configs(connection_parameters).create()
-root = Root(session)
+# Global session variable
+session = None
+root = None
 
-MODELS = [
-    "mistral-large2",
-    "llama3.1-70b",
-    "llama3.1-8b",
-]
+@st.cache_resource
+def get_snowflake_session():
+    """Get cached Snowflake session"""
+    try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Get Snowflake credentials from environment variables
+        account = os.getenv('SNOWFLAKE_ACCOUNT')
+        user = os.getenv('SNOWFLAKE_USER')
+        password = os.getenv('SNOWFLAKE_PASSWORD')
+        role = os.getenv('SNOWFLAKE_ROLE')
+        warehouse = os.getenv('SNOWFLAKE_WAREHOUSE')
+        database = os.getenv('SNOWFLAKE_DATABASE')
+        schema = os.getenv('SNOWFLAKE_SCHEMA')
+        
+        if not all([account, user, password, role, warehouse, database, schema]):
+            st.error("Missing Snowflake credentials")
+            return None
+            
+        # Create Snowflake session
+        return Session.builder.configs({
+            "account": account,
+            "user": user,
+            "password": password,
+            "role": role,
+            "warehouse": warehouse,
+            "database": database,
+            "schema": schema
+        }).create()
+    
+    except Exception as e:
+        st.error(f"Snowflake Connection Error: {str(e)}")
+        return None
 
-def init_messages():
-    """
-    Initialize the session state for chat messages. If the session state indicates that the
-    conversation should be cleared or if the "messages" key is not in the session state,
-    initialize it as an empty list.
-    """
-    if st.session_state.clear_conversation or "messages" not in st.session_state:
-        st.session_state.messages = []
-
-
-def init_service_metadata():
-    """
-    Initialize the session state for cortex search service metadata. Query the available
-    cortex search services from the Snowflake session and store their names and search
-    columns in the session state.
-    """
-    if "service_metadata" not in st.session_state:
-        services = session.sql("SHOW CORTEX SEARCH SERVICES;").collect()
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_service_metadata(_session):
+    """Get cached service metadata"""
+    if not _session:
+        return []
+        
+    try:
+        services = _session.sql("SHOW CORTEX SEARCH SERVICES;").collect()
         service_metadata = []
         if services:
             for s in services:
-                svc_name = s["name"]
-                svc_search_col = session.sql(
-                    f"DESC CORTEX SEARCH SERVICE {svc_name};"
-                ).collect()[0]["search_column"]
-                service_metadata.append(
-                    {"name": svc_name, "search_column": svc_search_col}
+                service_metadata.append({
+                    "name": s["name"]
+                })
+        return service_metadata
+    except Exception as e:
+        if st.session_state.debug:
+            st.error(f"Error getting service metadata: {str(e)}")
+        return []
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_recent_bills(_session):
+    """Get cached recent bills"""
+    if not _session:
+        return []
+        
+    try:
+        return _session.sql("""
+            SELECT DISTINCT source_file, bill_subtitle, bill_sponsor, date_filed
+            FROM BILL_CHUNKS
+            ORDER BY date_filed DESC
+            LIMIT 5
+        """).collect()
+    except Exception as e:
+        if st.session_state.debug:
+            st.error(f"Error getting recent bills: {str(e)}")
+        return []
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_bill_stats(_session):
+    """Get cached bill statistics"""
+    if not _session:
+        return {'total_bills': 0, 'latest_file_date': None}
+        
+    try:
+        stats = _session.sql("""
+            SELECT 
+                COUNT(DISTINCT source_file) as total_bills,
+                MAX(date_filed) as latest_file_date
+            FROM BILL_CHUNKS
+        """).collect()
+        if stats and len(stats) > 0:
+            return {
+                'total_bills': stats[0]['TOTAL_BILLS'],
+                'latest_file_date': stats[0]['LATEST_FILE_DATE']
+            }
+        return {'total_bills': 0, 'latest_file_date': None}
+    except Exception as e:
+        if st.session_state.debug:
+            st.error(f"Error getting bill stats: {str(e)}")
+        return {'total_bills': 0, 'latest_file_date': None}
+
+def format_date(date):
+    """Safely format a date with null check"""
+    if date is None:
+        return "No date"
+    try:
+        return date.strftime('%Y-%m-%d')
+    except:
+        return str(date)
+
+def init_session_state():
+    """Initialize all session state variables"""
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "debug" not in st.session_state:
+        st.session_state.debug = False
+    if "use_chat_history" not in st.session_state:
+        st.session_state.use_chat_history = True
+    if "model_name" not in st.session_state:
+        st.session_state.model_name = "mistral-large2"
+    if "num_retrieved_chunks" not in st.session_state:
+        st.session_state.num_retrieved_chunks = 5
+    if "num_chat_messages" not in st.session_state:
+        st.session_state.num_chat_messages = 10
+    if "service_metadata" not in st.session_state:
+        st.session_state.service_metadata = []
+    if "selected_cortex_search_service" not in st.session_state:
+        st.session_state.selected_cortex_search_service = None
+
+def query_cortex_search_service(query, columns=None, filter=None):
+    """Query the cortex search service"""
+    if columns is None:
+        columns = ["chunk", "source_file", "chunk_index", "bill_subtitle", "bill_sponsor", "date_filed"]
+    
+    try:
+        # Build query
+        select_cols = ", ".join(columns)
+        where_clause = f"AND {filter}" if filter else ""
+        
+        # Use semantic search on the table directly
+        query_sql = f"""
+            SELECT {select_cols}
+            FROM BILL_CHUNKS
+            WHERE SEMANTIC_CONTAINS(chunk, '{query}', 'bill_search_service')
+            {where_clause}
+            LIMIT {st.session_state.num_retrieved_chunks}
+        """
+        
+        if st.session_state.debug:
+            st.sidebar.write("Query SQL:", query_sql)
+            
+        results = session.sql(query_sql).collect()
+        
+        if not results:
+            if st.session_state.debug:
+                st.error("No results found")
+            return "", []
+            
+        # Format results for context
+        context_parts = []
+        for r in results:
+            try:
+                bill_name = r['SOURCE_FILE'].replace('.pdf', '') if r['SOURCE_FILE'] else 'Unknown Bill'
+                sponsor = r['BILL_SPONSOR'] if r['BILL_SPONSOR'] else 'Unknown Sponsor'
+                chunk = r['CHUNK'] if r['CHUNK'] else 'No content available'
+                
+                context_parts.append(
+                    f"From {format_bill_reference(bill_name)} "
+                    f"(Filed: {format_date(r['DATE_FILED'])}, "
+                    f"Sponsor: {sponsor}):\n"
+                    f"{chunk}\n"
                 )
-
-        st.session_state.service_metadata = service_metadata
-
+            except Exception as e:
+                if st.session_state.debug:
+                    st.error(f"Error formatting result: {str(e)}")
+                continue
+        
+        if not context_parts:
+            return "", []
+            
+        return "\n---\n".join(context_parts), results
+        
+    except Exception as e:
+        if st.session_state.debug:
+            st.error(f"Search error: {str(e)}")
+        return "", []
 
 def init_config_options():
-    """
-    Initialize the configuration options in the Streamlit sidebar. Allow the user to select
-    a cortex search service, clear the conversation, toggle debug mode, and toggle the use of
-    chat history. Also provide advanced options to select a model, the number of context chunks,
-    and the number of chat messages to use in the chat history.
-    """
-    st.sidebar.selectbox(
-        "Select cortex search service:",
-        [s["name"] for s in st.session_state.service_metadata],
-        key="selected_cortex_search_service",
-    )
+    """Initialize configuration options in sidebar"""
+    global session
+    
+    # Display bill metadata with links
+    with st.sidebar.expander("Recent Bills", expanded=False):
+        recent_bills = get_recent_bills(session)
+        if recent_bills:
+            for bill in recent_bills:
+                try:
+                    if bill and 'SOURCE_FILE' in bill:
+                        bill_name = bill['SOURCE_FILE'].replace('.pdf', '')
+                        subtitle = bill['BILL_SUBTITLE'] if 'BILL_SUBTITLE' in bill else 'No subtitle available'
+                        sponsor = bill['BILL_SPONSOR'] if 'BILL_SPONSOR' in bill else 'Unknown'
+                        date_filed = bill['DATE_FILED'] if 'DATE_FILED' in bill else None
+                        
+                        st.markdown(
+                            f"**{format_bill_reference(bill_name)}**  \n"
+                            f"Filed: {format_date(date_filed)}  \n"
+                            f"Sponsor: {sponsor}  \n"
+                            f"_{subtitle}_  \n"
+                            "---"
+                        )
+                except Exception as e:
+                    if st.session_state.debug:
+                        st.error(f"Error displaying bill: {str(e)}")
+                    continue
+        else:
+            st.write("No recent bills available")
 
-    st.sidebar.button("Clear conversation", key="clear_conversation")
-    st.sidebar.toggle("Debug", key="debug", value=False)
-    st.sidebar.toggle("Use chat history", key="use_chat_history", value=True)
+    # Clear conversation button
+    if st.sidebar.button("Clear conversation"):
+        st.session_state.messages = []
+        st.rerun()
 
+    # Debug and chat history toggles
+    st.session_state.debug = st.sidebar.toggle("Debug", value=st.session_state.debug)
+    st.session_state.use_chat_history = st.sidebar.toggle("Use chat history", value=st.session_state.use_chat_history)
+
+    # Advanced options
     with st.sidebar.expander("Advanced options"):
-        st.selectbox("Select model:", MODELS, key="model_name")
-        st.number_input(
+        # Select Cortex search service if available
+        if st.session_state.service_metadata:
+            st.session_state.selected_cortex_search_service = st.selectbox(
+                "Select cortex search service:",
+                [s["name"] for s in st.session_state.service_metadata],
+                index=0 if st.session_state.selected_cortex_search_service is None else 
+                      [s["name"] for s in st.session_state.service_metadata].index(st.session_state.selected_cortex_search_service)
+            )
+        
+        st.session_state.model_name = st.selectbox(
+            "Select model:", 
+            ["mistral-large2", "llama3.1-70b", "llama3.1-8b"],
+            index=["mistral-large2", "llama3.1-70b", "llama3.1-8b"].index(st.session_state.model_name)
+        )
+        st.session_state.num_retrieved_chunks = st.number_input(
             "Select number of context chunks",
-            value=5,
-            key="num_retrieved_chunks",
+            value=st.session_state.num_retrieved_chunks,
             min_value=1,
             max_value=10,
         )
-        st.number_input(
-            "Select number of messages to use in chat history",
-            value=5,
-            key="num_chat_messages",
+        st.session_state.num_chat_messages = st.number_input(
+            "Number of chat messages to include",
+            value=st.session_state.num_chat_messages,
             min_value=1,
-            max_value=10,
+            max_value=50,
         )
 
-    st.sidebar.expander("Session State").write(st.session_state)
-
-
-def query_cortex_search_service(query, columns = [], filter={}):
+def load_bills_to_snowflake():
     """
-    Query the selected cortex search service with the given query and retrieve context documents.
-    Display the retrieved context documents in the sidebar if debug mode is enabled. Return the
-    context documents as a string.
-
-    Args:
-        query (str): The query to search the cortex search service with.
-
-    Returns:
-        str: The concatenated string of context documents.
+    Process all PDFs in the bills directory and load them into Snowflake
     """
-    db, schema = session.get_current_database(), session.get_current_schema()
-
-    cortex_search_service = (
-        root.databases[db]
-        .schemas[schema]
-        .cortex_search_services[st.session_state.selected_cortex_search_service]
-    )
-
-    context_documents = cortex_search_service.search(
-        query, columns=columns, filter=filter, limit=st.session_state.num_retrieved_chunks
-    )
-    results = context_documents.results
-
-    service_metadata = st.session_state.service_metadata
-    search_col = [s["search_column"] for s in service_metadata
-                    if s["name"] == st.session_state.selected_cortex_search_service][0].lower()
-
-    context_str = ""
-    for i, r in enumerate(results):
-        context_str += f"Context document {i+1}: {r[search_col]} \n" + "\n"
-
-    if st.session_state.debug:
-        st.sidebar.text_area("Context documents", context_str, height=500)
-
-    return context_str, results
-
-
-def get_chat_history():
-    """
-    Retrieve the chat history from the session state limited to the number of messages specified
-    by the user in the sidebar options.
-
-    Returns:
-        list: The list of chat messages from the session state.
-    """
-    start_index = max(
-        0, len(st.session_state.messages) - st.session_state.num_chat_messages
-    )
-    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
-
-
-def complete(model, prompt):
-    """
-    Generate a completion for the given prompt using the specified model.
-
-    Args:
-        model (str): The name of the model to use for completion.
-        prompt (str): The prompt to generate a completion for.
-
-    Returns:
-        str: The generated completion.
-    """
-    return Complete(model, prompt).replace("$", "\$")
-
-
-def make_chat_history_summary(chat_history, question):
-    """
-    Generate a summary of the chat history combined with the current question to extend the query
-    context. Use the language model to generate this summary.
-
-    Args:
-        chat_history (str): The chat history to include in the summary.
-        question (str): The current user question to extend with the chat history.
-
-    Returns:
-        str: The generated summary of the chat history and question.
-    """
-    prompt = f"""
-        [INST]
-        Based on the chat history below and the question, generate a query that extend the question
-        with the chat history provided. The query should be in natural language.
-        Answer with only the query. Do not add any explanation.
-
-        <chat_history>
-        {chat_history}
-        </chat_history>
-        <question>
-        {question}
-        </question>
-        [/INST]
-    """
-
-    summary = complete(st.session_state.model_name, prompt)
-
-    if st.session_state.debug:
-        st.sidebar.text_area(
-            "Chat history summary", summary.replace("$", "\$"), height=150
-        )
-
-    return summary
-
-
+    try:
+        print("Starting bill loading process...")
+        
+        # Create processor
+        processor = LocalPDFProcessor('bills', 'csv_files')
+        print("Created PDF processor")
+        
+        # Process PDFs
+        print("Processing PDFs...")
+        processor.process_pdfs()
+        print("Finished processing PDFs")
+        
+        # Get list of CSV files
+        csv_files = [f for f in os.listdir('csv_files') if f.endswith('.csv')]
+        print(f"Found {len(csv_files)} CSV files: {csv_files}")
+        
+        # Process each CSV file
+        for csv_file in csv_files:
+            try:
+                print(f"Processing {csv_file}...")
+                
+                # Read CSV file
+                df = pd.read_csv(f'csv_files/{csv_file}')
+                print(f"Read CSV file with {len(df)} rows")
+                
+                # Convert timestamp columns to proper format
+                if 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                if 'date_filed' in df.columns:
+                    df['date_filed'] = pd.to_datetime(df['date_filed'])
+                
+                # Convert to Snowpark DataFrame
+                print(f"Writing {csv_file} to Snowflake...")
+                snow_df = session.create_dataframe(df)
+                snow_df.write.mode("append").save_as_table("BILL_CHUNKS")
+                print(f"Successfully wrote {csv_file} to Snowflake")
+                
+            except Exception as e:
+                print(f"Error processing {csv_file}: {str(e)}")
+                print(f"Error type: {type(e)}")
+                print(f"Traceback: {traceback.format_exc()}")
+                continue
+                
+    except Exception as e:
+        print(f"Error in load_bills_to_snowflake: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        
 def create_prompt(user_question):
-    """
-    Create a prompt for the language model by combining the user question with context retrieved
-    from the cortex search service and chat history (if enabled). Format the prompt according to
-    the expected input format of the model.
-
-    Args:
-        user_question (str): The user's question to generate a prompt for.
-
-    Returns:
-        str: The generated prompt for the language model.
-    """
+    """Create prompt for the language model"""
+    # Get current bill statistics
+    bill_stats = get_bill_stats(session)
+    
     if st.session_state.use_chat_history:
         chat_history = get_chat_history()
         if chat_history != []:
-            question_summary = make_chat_history_summary(chat_history, user_question)
             prompt_context, results = query_cortex_search_service(
-                question_summary,
-                columns=["chunk", "file_url", "relative_path"],
-                filter={"@and": [{"@eq": {"language": "English"}}]},
+                user_question,
+                columns=["chunk", "source_file"],
+                filter={}
             )
         else:
             prompt_context, results = query_cortex_search_service(
                 user_question,
-                columns=["chunk", "file_url", "relative_path"],
-                filter={"@and": [{"@eq": {"language": "English"}}]},
+                columns=["chunk", "source_file"],
+                filter={}
             )
             chat_history = ""
 
+    # Process context to include bill links
+    processed_context = prompt_context
+    if results:
+        for result in results:
+            if 'source_file' in result:
+                bill_name = result['source_file'].replace('.pdf', '')
+                bill_ref = format_bill_reference(bill_name)
+                processed_context = processed_context.replace(bill_name, bill_ref)
+
     prompt = f"""
             [INST]
-            You are a helpful AI chat assistant with RAG capabilities to explain legislative bills
-            that have been filed for the upcoming 2025 legislative session in Arkansas (no other state).
-            When a bill has HB in the name, it is a house bill. When it has SB, it is a senat bill. When a user asks you a question,
-            you will also be given context provided between <context> and </context> tags. Use that context
-            with the user's chat history provided in the between <chat_history> and </chat_history> tags
-            to provide a summary that addresses the user's question. Ensure the answer is coherent, concise,
-            and directly relevant to the user's question.
+            You are a helpful AI assistant specifically focused on Arkansas legislative bills filed for the 2025 session. Your purpose is to help users understand and navigate these bills.
 
-            If the user asks a generic question which cannot be answered with the given context or chat_history,
-            just say "I don't know the answer to that question.
+            Current Bill Statistics:
+            - Total Bills Filed: {bill_stats['total_bills']}
+            - Latest Filing Date: {bill_stats['latest_file_date']}
 
-            Don't saying things like "according to the provided context".
+            IMPORTANT RESPONSE GUIDELINES:
+            1. ONLY answer questions about Arkansas legislative bills for the 2025 session
+            2. If a user asks about:
+               - Bills from other states
+               - Federal legislation
+               - Past Arkansas sessions
+               - Any non-legislative topics
+               Respond with: "I'm specifically designed to help with Arkansas legislative bills for the 2025 session. That topic is outside my scope. 
+               Would you like to know:
+               - How many bills have been filed so far?
+               - What bills were filed this week?
+               - Information about a specific bill?"
+            3. For valid questions, use the context provided between <context> tags and chat history between <chat_history> tags
+            4. Never say "according to the provided context" or similar phrases
+            5. For questions about bill counts or statistics, use the Current Bill Statistics provided above
+            6. If you can't find information about a specific bill in the context, say "I don't have information about that specific bill in my current database."
+            7. When referring to bills, use the markdown link format provided in the context. For example: [SB1](URL)
 
             <chat_history>
             {chat_history}
             </chat_history>
             <context>
-            {prompt_context}
+            {processed_context}
             </context>
             <question>
             {user_question}
@@ -278,54 +442,91 @@ def create_prompt(user_question):
             """
     return prompt, results
 
+def get_bill_url(bill_name):
+    """Generate URL for a bill"""
+    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}.pdf"
+
+def format_bill_reference(bill_name):
+    """Format a bill reference with its URL"""
+    url = get_bill_url(bill_name)
+    return f"[{bill_name}]({url})"
+
+def get_chat_history():
+    """Get chat history"""
+    start_index = max(
+        0, len(st.session_state.messages) - st.session_state.num_chat_messages
+    )
+    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
+
+def complete(model, prompt):
+    """Generate completion using Snowflake"""
+    return Complete(model, prompt, session=session).replace("$", "\$")
 
 def main():
-    st.title(f":speech_balloon: Chatbot with Snowflake Cortex")
+    st.title("AR Legislative AI Bill Bot ")
+    st.markdown("""
+    ### Welcome! Ask me anything about bills filed for the upcoming 2025 session! 
+    I'm here to help you understand and navigate through Arkansas legislative bills.
+    """)
 
-    init_service_metadata()
+    # Initialize session state
+    init_session_state()
+
+    # Initialize Snowflake
+    global session
+    session = get_snowflake_session()
+    
+    # Get service metadata
+    st.session_state.service_metadata = get_service_metadata(session)
+    
+    # Initialize UI components
     init_config_options()
-    init_messages()
-
-    icons = {"assistant": "❄️", "user": "👤"}
 
     # Display chat messages from history on app rerun
     for message in st.session_state.messages:
-        with st.chat_message(message["role"], avatar=icons[message["role"]]):
+        with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    disable_chat = (
-        "service_metadata" not in st.session_state
-        or len(st.session_state.service_metadata) == 0
-    )
+    # Create a container for the chat interface
+    chat_container = st.container()
+
+    # Check if chat should be disabled
+    disable_chat = session is None
+    
+    # Debug information
+    if st.session_state.debug:
+        st.sidebar.write("Debug Info:")
+        st.sidebar.write(f"Session Active: {session is not None}")
+        st.sidebar.write(f"Chat Disabled: {disable_chat}")
+    
     if question := st.chat_input("Ask a question...", disabled=disable_chat):
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": question})
+        
         # Display user message in chat message container
-        with st.chat_message("user", avatar=icons["user"]):
-            st.markdown(question.replace("$", "\$"))
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(question.replace("$", "\$"))
 
-        # Display assistant response in chat message container
-        with st.chat_message("assistant", avatar=icons["assistant"]):
-            message_placeholder = st.empty()
-            question = question.replace("'", "")
-            prompt, results = create_prompt(question)
-            with st.spinner("Thinking..."):
-                generated_response = complete(
-                    st.session_state.model_name, prompt
+            # Display assistant response in chat message container
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                
+                # Show thinking animation
+                with st.spinner("Thinking..."):
+                    question = question.replace("'", "")
+                    prompt, results = create_prompt(question)
+                    generated_response = complete(
+                        st.session_state.model_name, prompt
+                    )
+                
+                # Display the response
+                message_placeholder.markdown(generated_response)
+                
+                # Add to chat history
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": generated_response}
                 )
-                # build references table for citation
-                markdown_table = "###### References \n\n| PDF Title | URL |\n|-------|-----|\n"
-                for ref in results:
-                    markdown_table += f"| {ref['relative_path']} | [Link]({ref['file_url']}) |\n"
-                message_placeholder.markdown(generated_response + "\n\n" + markdown_table)
-
-        st.session_state.messages.append(
-            {"role": "assistant", "content": generated_response}
-        )
-
-    # Close the session when done
-    session.close()
-
 
 if __name__ == "__main__":
     main()
