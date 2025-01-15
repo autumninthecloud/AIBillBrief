@@ -57,6 +57,7 @@ This project implements the hackathon's required technology stack:
 - Python 3.8 or higher
 - Snowflake account with appropriate permissions
 - Required Python packages (see `requirements.txt`)
+- Arkansas state flag image (`flag.png`) in the root directory
 
 ## Installation
 
@@ -84,9 +85,13 @@ SNOWFLAKE_DATABASE=<your-database>
 SNOWFLAKE_SCHEMA=<your-schema>
 ```
 
+4. Add required assets:
+   - Place the Arkansas state flag image as `flag.png` in the root directory
+   - Place your PDF bills in the `bills` directory
+
 ## Usage
 
-1. Place your PDF bills in the `bills` directory
+1. Ensure all prerequisites are met and assets are in place
 
 2. Run the Streamlit application:
 ```bash
@@ -94,18 +99,11 @@ streamlit run local_streamlit_app.py
 ```
 
 3. Use the web interface to:
-   - Process PDF documents
    - Search through bill contents
-   - Analyze legislative documents
-   - Get AI-powered insights using Mistral LLM
-   - Ask natural language questions about bills
-   
-4. Advanced Options:
-   - Select between different Mistral models
-   - Adjust the number of context chunks
-   - Configure chat history length
-   - Clear conversation history
-   - Enable debug mode
+   - Ask questions about specific bills (e.g., "Tell me about Senate Bill 8")
+   - Find bills by sponsor (e.g., "What bills has Senator Payton filed?")
+   - Browse recent bills (e.g., "Show me a recent House Bill")
+   - Get AI-powered insights using natural language queries
 
 ## Project Structure
 

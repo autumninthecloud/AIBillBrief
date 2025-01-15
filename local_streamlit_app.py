@@ -8,6 +8,14 @@ from snowflake.core import Root
 from snowflake.cortex import Complete
 from local_pdf_processor import LocalPDFProcessor
 import json
+import re
+
+# Set page config at the very start
+st.set_page_config(
+    page_title="AI Bill Brief - Arkansas Legislative Assistant",
+    page_icon="🏛️",
+    layout="wide"
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -104,6 +112,18 @@ def get_snowflake_session():
         st.error(f"Snowflake Connection Error: {str(e)}")
         return None
 
+def get_row_value(row, column):
+    """Safely get a value from a Snowflake row object"""
+    try:
+        # Try direct attribute access
+        return getattr(row, column.upper(), None)
+    except:
+        try:
+            # Try dictionary-style access
+            return row[column]
+        except:
+            return None
+
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_service_metadata(_session):
     """Get cached service metadata"""
@@ -116,7 +136,7 @@ def get_service_metadata(_session):
         if services:
             for s in services:
                 service_metadata.append({
-                    "name": s["name"]
+                    "name": get_row_value(s, "name")
                 })
         return service_metadata
     except Exception as e:
@@ -157,8 +177,8 @@ def get_bill_stats(_session):
         """).collect()
         if stats and len(stats) > 0:
             return {
-                'total_bills': stats[0]['TOTAL_BILLS'],
-                'latest_file_date': stats[0]['LATEST_FILE_DATE']
+                'total_bills': get_row_value(stats[0], 'TOTAL_BILLS'),
+                'latest_file_date': get_row_value(stats[0], 'LATEST_FILE_DATE')
             }
         return {'total_bills': 0, 'latest_file_date': None}
     except Exception as e:
@@ -197,60 +217,405 @@ def init_session_state():
 def query_cortex_search_service(query, columns=None, filter=None):
     """Query the cortex search service"""
     if columns is None:
-        columns = ["chunk", "source_file", "chunk_index", "bill_subtitle", "bill_sponsor", "date_filed"]
+        # For now, just get the essential columns since we'll extract other info from chunk
+        columns = ["chunk", "source_file", "chunk_index"]
     
     try:
+        # First, let's check what's in the database
+        check_sql = """
+            SELECT COUNT(*) as row_count 
+            FROM BILL_CHUNKS;
+        """
+        row_count = session.sql(check_sql).collect()
+        if st.session_state.debug:
+            st.sidebar.write("Total rows in BILL_CHUNKS:", get_row_value(row_count[0], 'ROW_COUNT'))
+        
+        # Check what bills are available
+        check_sql = """
+            SELECT DISTINCT source_file
+            FROM BILL_CHUNKS
+            ORDER BY source_file;
+        """
+        available_bills = session.sql(check_sql).collect()
+        if st.session_state.debug:
+            st.sidebar.write("Available bills:", [get_row_value(r, 'SOURCE_FILE') for r in available_bills])
+        
         # Build query
-        select_cols = ", ".join(columns)
+        select_cols = ", ".join(columns)  # This ensures we get all needed columns
         where_clause = f"AND {filter}" if filter else ""
         
-        # Use semantic search on the table directly
-        query_sql = f"""
-            SELECT {select_cols}
-            FROM BILL_CHUNKS
-            WHERE SEMANTIC_CONTAINS(chunk, '{query}', 'bill_search_service')
-            {where_clause}
-            LIMIT {st.session_state.num_retrieved_chunks}
-        """
+        # Check for general bill type queries first
+        bill_type_patterns = [
+            # House Bills
+            (r'(?:recent|latest|any|tell|show|about|summary).*(?:house bill|hb)s?', 'HB'),
+            (r'(?:house bill|hb)s?.*(?:recent|latest|filed|new)', 'HB'),
+            # Senate Bills
+            (r'(?:recent|latest|any|tell|show|about|summary).*(?:senate bill|sb)s?', 'SB'),
+            (r'(?:senate bill|sb)s?.*(?:recent|latest|filed|new)', 'SB'),
+            # Fallback patterns
+            (r'\b(?:house bill|hb)s?\b', 'HB'),
+            (r'\b(?:senate bill|sb)s?\b', 'SB')
+        ]
+        
+        bill_type = None
+        for pattern, btype in bill_type_patterns:
+            if re.search(pattern, query, re.IGNORECASE):
+                bill_type = btype
+                break
+        
+        if bill_type:
+            if st.session_state.debug:
+                st.sidebar.write(f"Looking for {bill_type} bills")
+            
+            # Get the most recent bill of this type
+            query_sql = f"""
+                WITH RankedBills AS (
+                    SELECT DISTINCT source_file,
+                           ROW_NUMBER() OVER (ORDER BY source_file DESC) as rn
+                    FROM BILL_CHUNKS
+                    WHERE source_file LIKE '{bill_type}%'
+                )
+                SELECT b.chunk, b.source_file, b.chunk_index
+                FROM BILL_CHUNKS b
+                INNER JOIN RankedBills r ON r.source_file = b.source_file
+                WHERE r.rn = 1
+                ORDER BY b.chunk_index;
+            """
+            
+        else:
+            # Check for sponsor query patterns
+            sponsor_patterns = [
+                r'(?:bills? (?:by|from|sponsored by)|what (?:bills|else) (?:has|have|did))?\s*(?:senator[s]?\s+[^\\n]+)',
+                r'(?:what|any|other)\s+bills?\s+(?:by|from|sponsored by)\s+([a-zA-Z.\s-]+?)(?:\s+(?:sponsor|file|author)|[?.,]|$)'
+            ]
+            
+            sponsor_name = None
+            for pattern in sponsor_patterns:
+                match = re.search(pattern, query, re.IGNORECASE)
+                if match:
+                    sponsor_name = match.group(1).strip()
+                    break
+                    
+            if sponsor_name:
+                if st.session_state.debug:
+                    st.sidebar.write(f"Looking for bills by sponsor: {sponsor_name}")
+                
+                # Get bills where first chunk contains the sponsor
+                query_sql = f"""
+                    WITH RankedChunks AS (
+                        SELECT chunk, source_file, chunk_index,
+                               ROW_NUMBER() OVER (PARTITION BY source_file ORDER BY chunk_index) as rn
+                        FROM BILL_CHUNKS
+                    )
+                    SELECT DISTINCT b.chunk, b.source_file, b.chunk_index
+                    FROM BILL_CHUNKS b
+                    INNER JOIN RankedChunks r ON r.source_file = b.source_file
+                    WHERE r.rn = 1 
+                    AND r.chunk LIKE '%By:%'
+                    AND r.chunk LIKE '%{sponsor_name}%'
+                    ORDER BY b.source_file, b.chunk_index;
+                """
+                
+            else:
+                # Extract specific bill number from query
+                bill_patterns = [
+                    r'\b(SB|sb|Senate Bill|senate bill)\s*(\d+)\b',
+                    r'\b(HB|hb|House Bill|house bill)\s*(\d+)\b'
+                ]
+                
+                bill_query = None
+                for pattern in bill_patterns:
+                    match = re.search(pattern, query, re.IGNORECASE)
+                    if match:
+                        prefix = 'SB' if match.group(1).upper() in ['SB', 'SENATE BILL'] else 'HB'
+                        number = match.group(2)
+                        bill_query = f"{prefix}{number}"
+                        break
+                
+                if bill_query:
+                    if st.session_state.debug:
+                        st.sidebar.write(f"Extracted bill number: {bill_query}")
+                    
+                    query_sql = f"""
+                        SELECT {select_cols}
+                        FROM BILL_CHUNKS
+                        WHERE UPPER(source_file) LIKE '%{bill_query.upper()}.PDF%'
+                        {where_clause}
+                        ORDER BY chunk_index
+                        LIMIT {st.session_state.num_retrieved_chunks}
+                    """
+                else:
+                    # Use text search as last resort
+                    query_sql = f"""
+                        SELECT {select_cols}
+                        FROM BILL_CHUNKS
+                        WHERE CONTAINS(chunk, '{query}')
+                        {where_clause}
+                        ORDER BY chunk_index
+                        LIMIT {st.session_state.num_retrieved_chunks}
+                    """
         
         if st.session_state.debug:
             st.sidebar.write("Query SQL:", query_sql)
+            st.sidebar.write("Selected columns:", columns)
             
         results = session.sql(query_sql).collect()
         
         if not results:
             if st.session_state.debug:
                 st.error("No results found")
+                # Let's check if the table exists and has the right structure
+                check_sql = """
+                    SELECT column_name, data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'BILL_CHUNKS';
+                """
+                table_info = session.sql(check_sql).collect()
+                st.sidebar.write("Table structure:", [(get_row_value(r, 'COLUMN_NAME'), get_row_value(r, 'DATA_TYPE')) for r in table_info])
             return "", []
             
         # Format results for context
         context_parts = []
+        current_bill = None
+        bill_chunks = []
+        
         for r in results:
             try:
-                bill_name = r['SOURCE_FILE'].replace('.pdf', '') if r['SOURCE_FILE'] else 'Unknown Bill'
-                sponsor = r['BILL_SPONSOR'] if r['BILL_SPONSOR'] else 'Unknown Sponsor'
-                chunk = r['CHUNK'] if r['CHUNK'] else 'No content available'
+                if st.session_state.debug:
+                    st.sidebar.write("Processing result:")
+                    for col in columns:
+                        st.sidebar.write(f"{col}: {get_row_value(r, col)}")
                 
-                context_parts.append(
-                    f"From {format_bill_reference(bill_name)} "
-                    f"(Filed: {format_date(r['DATE_FILED'])}, "
-                    f"Sponsor: {sponsor}):\n"
-                    f"{chunk}\n"
-                )
+                # Extract bill info from chunk
+                chunk_text = get_row_value(r, 'CHUNK')
+                if not chunk_text:
+                    if st.session_state.debug:
+                        st.error("No chunk text found in result")
+                    continue
+                    
+                bill_name = get_row_value(r, 'SOURCE_FILE')
+                if bill_name:
+                    bill_name = bill_name.replace('.pdf', '')
+                else:
+                    bill_name = 'Unknown Bill'
+                
+                # If this is a new bill, process the previous bill's chunks
+                if current_bill and current_bill != bill_name and bill_chunks:
+                    # Process the accumulated chunks
+                    full_text = "\n".join(bill_chunks)
+                    bill_info = extract_bill_info_from_chunk(full_text)
+                    header = format_bill_header(current_bill, bill_info)
+                    context_parts.append(f"{header}\n\n{full_text}\n")
+                    bill_chunks = []
+                
+                # Update current bill and add chunk
+                current_bill = bill_name
+                bill_chunks.append(chunk_text)
+                
             except Exception as e:
                 if st.session_state.debug:
                     st.error(f"Error formatting result: {str(e)}")
+                    st.sidebar.write("Available columns:", columns)
+                    st.sidebar.write("Raw result:", r)
                 continue
+        
+        # Process the last bill's chunks
+        if current_bill and bill_chunks:
+            full_text = "\n".join(bill_chunks)
+            bill_info = extract_bill_info_from_chunk(full_text)
+            header = format_bill_header(current_bill, bill_info)
+            context_parts.append(f"{header}\n\n{full_text}\n")
         
         if not context_parts:
             return "", []
+            
+        # Add appropriate summary based on query type
+        if bill_type:
+            summary = f"Here's the most recent {bill_type} bill:\n\n"
+            context_parts.insert(0, summary)
+        elif sponsor_name:
+            bill_count = len(context_parts)
+            summary = f"Found {bill_count} bill{'s' if bill_count != 1 else ''} sponsored by {sponsor_name}:\n\n"
+            context_parts.insert(0, summary)
             
         return "\n---\n".join(context_parts), results
         
     except Exception as e:
         if st.session_state.debug:
             st.error(f"Search error: {str(e)}")
+            st.sidebar.write("Full error:", str(e))
         return "", []
+
+def extract_bill_info_from_chunk(chunk):
+    """Extract bill information from the chunk text"""
+    info = {
+        'sponsor': 'Unknown Sponsor',
+        'subtitle': None,
+        'date_filed': None,
+        'summary': None
+    }
+    
+    # Extract sponsor
+    sponsor_match = re.search(r'By:\s*(Senator[s]?\s+[^\\n]+)', chunk)
+    if sponsor_match:
+        info['sponsor'] = sponsor_match.group(1).strip()
+    
+    # Extract subtitle
+    subtitle_match = re.search(r'Subtitle\s*\n((?:[^\n]+\n?)+?)(?=\n\s*\n|BE IT ENACTED)', chunk)
+    if subtitle_match:
+        info['subtitle'] = subtitle_match.group(1).strip()
+    
+    # Extract date
+    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', chunk)
+    if date_match:
+        info['date_filed'] = date_match.group(1)
+    
+    # Extract summary (everything between "AN ACT" and "BE IT ENACTED")
+    summary_match = re.search(r'AN ACT\s+(.+?)(?=\n\s*\n\s*Subtitle|BE IT ENACTED)', chunk, re.DOTALL)
+    if summary_match:
+        summary = summary_match.group(1).strip()
+        # Clean up the summary
+        summary = re.sub(r'\s+', ' ', summary)  # Replace multiple whitespace with single space
+        info['summary'] = summary
+        
+    return info
+
+def format_bill_header(bill_name, bill_info):
+    """Format the bill header with consistent styling"""
+    header_parts = []
+    
+    # Bill name
+    header_parts.append(f"## {format_bill_reference(bill_name)}")
+    
+    # Summary if available
+    if bill_info['summary']:
+        header_parts.append(f"**Summary**: {bill_info['summary']}")
+    
+    # Subtitle if different from summary
+    if bill_info['subtitle'] and (not bill_info['summary'] or bill_info['subtitle'] != bill_info['summary']):
+        header_parts.append(f"**Subtitle**: {bill_info['subtitle']}")
+    
+    # Metadata
+    meta_parts = []
+    if bill_info['sponsor']:
+        meta_parts.append(f"**Sponsor**: {bill_info['sponsor']}")
+    if bill_info['date_filed']:
+        meta_parts.append(f"**Filed**: {bill_info['date_filed']}")
+    
+    if meta_parts:
+        header_parts.append(" | ".join(meta_parts))
+    
+    return "\n\n".join(header_parts)
+
+def create_prompt(user_question):
+    """Create prompt for the language model"""
+    # Get current bill statistics
+    bill_stats = get_bill_stats(session)
+    
+    if st.session_state.use_chat_history:
+        chat_history = get_chat_history()
+        if chat_history != []:
+            prompt_context, results = query_cortex_search_service(
+                user_question,
+                columns=["chunk", "source_file"],
+                filter={}
+            )
+        else:
+            prompt_context, results = query_cortex_search_service(
+                user_question,
+                columns=["chunk", "source_file"],
+                filter={}
+            )
+            chat_history = ""
+
+    # Process context to include bill links
+    processed_context = prompt_context
+    if results:
+        for result in results:
+            if 'source_file' in result:
+                bill_name = get_row_value(result, 'SOURCE_FILE')
+                if bill_name:
+                    bill_name = bill_name.replace('.pdf', '')
+                else:
+                    bill_name = 'Unknown Bill'
+                bill_ref = format_bill_reference(bill_name)
+                processed_context = processed_context.replace(bill_name, bill_ref)
+
+    prompt = f"""
+            [INST]
+            You are a helpful AI assistant specifically focused on Arkansas legislative bills filed for the 2025 session. 
+            Your purpose is to help users understand and navigate these bills. You provide summaries of bills and information about the bill filing.
+
+            Current Bill Statistics:
+            - Total Bills Filed: {bill_stats['total_bills']}
+            - Latest Filing Date: {bill_stats['latest_file_date']}
+
+            IMPORTANT RESPONSE GUIDELINES:
+            1. ONLY answer questions about Arkansas legislative bills for the 2025 session
+            2. If a user asks about:
+               - Bills from other states
+               - Federal legislation
+               - Past Arkansas sessions
+               - Any non-legislative topics
+               Respond with: "I'm specifically designed to help with Arkansas legislative bills for the 2025 session. That topic is outside my scope. 
+               Would you like to know:
+               - How many bills have been filed so far?
+               - What bills were filed this week?
+               - Information about a specific bill?"
+            3. For valid questions, use the context provided between <context> tags and chat history between <chat_history> tags
+            4. Never say "according to the provided context" or similar phrases
+            5. For questions about bill counts or statistics, use the Current Bill Statistics provided above
+            6. If you can't find information about a specific bill in the context, say "I don't have information about that specific bill in my current database."
+            7. When referring to bills, use the markdown link format provided in the context. For example: [SB1](URL)
+            8. When asked about bill sponsors, check the bill_sponsor metadata field in the context. If available, format the response as "The bill is sponsored by [Sponsor Name]"
+            9. For questions about bill types:
+               - Files with 'HB' in the name are House Bills (filed in the House of Representatives)
+               - Files with 'SB' in the name are Senate Bills (filed in the Senate)
+            10. When asked about bills without a specific bill number:
+                - For general queries like "tell me about a house bill" or "recent senate bill", look at the source_file names in the context
+                - Prioritize the most recently filed bills (check date_filed metadata)
+                - Include the bill type (House/Senate), bill number, sponsor, and a brief summary from the context
+                - Example response: "Here's a recent House Bill: [HB1234](URL) filed on [date]. The bill is sponsored by [Sponsor Name] and it [brief summary of the bill's purpose]"
+            11. Response Style:
+                - Always respond in clear, professional English
+                - Be polite and courteous
+                - Keep responses concise and to the point
+                - Focus on factual information without editorializing
+                - Use proper grammar and punctuation
+
+            <chat_history>
+            {chat_history}
+            </chat_history>
+            <context>
+            {processed_context}
+            </context>
+            <question>
+            {user_question}
+            </question>
+            [/INST]
+            Answer:
+            """
+    return prompt, results
+
+def get_bill_url(bill_name):
+    """Generate URL for a bill"""
+    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}.pdf"
+
+def format_bill_reference(bill_name):
+    """Format a bill reference with its URL"""
+    url = get_bill_url(bill_name)
+    return f"[{bill_name}]({url})"
+
+def get_chat_history():
+    """Get chat history"""
+    start_index = max(
+        0, len(st.session_state.messages) - st.session_state.num_chat_messages
+    )
+    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
+
+def complete(model, prompt):
+    """Generate completion using Snowflake"""
+    return Complete(model, prompt, session=session).replace("$", "\$")
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
@@ -263,10 +628,10 @@ def init_config_options():
             for bill in recent_bills:
                 try:
                     if bill and 'SOURCE_FILE' in bill:
-                        bill_name = bill['SOURCE_FILE'].replace('.pdf', '')
-                        subtitle = bill['BILL_SUBTITLE'] if 'BILL_SUBTITLE' in bill else 'No subtitle available'
-                        sponsor = bill['BILL_SPONSOR'] if 'BILL_SPONSOR' in bill else 'Unknown'
-                        date_filed = bill['DATE_FILED'] if 'DATE_FILED' in bill else None
+                        bill_name = get_row_value(bill, 'SOURCE_FILE').replace('.pdf', '')
+                        subtitle = get_row_value(bill, 'BILL_SUBTITLE') if 'BILL_SUBTITLE' in bill else 'No subtitle available'
+                        sponsor = get_row_value(bill, 'BILL_SPONSOR') if 'BILL_SPONSOR' in bill else 'Unknown'
+                        date_filed = get_row_value(bill, 'DATE_FILED') if 'DATE_FILED' in bill else None
                         
                         st.markdown(
                             f"**{format_bill_reference(bill_name)}**  \n"
@@ -318,6 +683,131 @@ def init_config_options():
             value=st.session_state.num_chat_messages,
             min_value=1,
             max_value=50,
+        )
+
+def init_main_container():
+    """Initialize the main container with welcome message and styling"""
+    # Add custom CSS for modern styling
+    st.markdown("""
+        <style>
+        .main-header {
+            text-align: center;
+            padding: 1rem;
+            margin-bottom: 2rem;
+        }
+        .subheader {
+            text-align: center;
+            color: #666;
+            margin-bottom: 2rem;
+        }
+        .stats-container {
+            text-align: center;
+            padding: 1rem;
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # Main header with modern emojis
+    st.markdown("""
+        <div class="main-header">
+            <h1>🏛️ AI Bill Brief</h1>
+        </div>
+        <div class="subheader">
+            <h3>Your Intelligent Guide to Arkansas Legislative Bills ⚖️</h3>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Get current statistics
+    stats = get_bill_stats(session)
+    
+    # Display stats in a modern container
+    st.markdown("""
+        <div class="stats-container">
+            <h4>📊 Current Session Statistics</h4>
+    """, unsafe_allow_html=True)
+    
+    # Create three columns for stats
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            "📝 Total Bills",
+            f"{stats['total_bills']}"
+        )
+    
+    with col2:
+        st.metric(
+            "📅 Session",
+            "2025 Regular"
+        )
+    
+    with col3:
+        if stats['latest_file_date']:
+            latest_date = stats['latest_file_date'].strftime("%m/%d/%Y")
+        else:
+            latest_date = "N/A"
+        st.metric(
+            "🔄 Last Updated",
+            latest_date
+        )
+    
+    # Add a welcoming prompt
+    st.markdown("""
+        <div style="text-align: center; margin-top: 2rem; margin-bottom: 2rem;">
+            <p>💬 Ask me anything about Arkansas Legislative Bills!</p>
+            <p style="color: #666; font-size: 0.9em;">
+                Try: "What's in Senate Bill 8?" or "Show me recent House Bills" 🔍
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+
+def init_sidebar():
+    """Initialize the sidebar with configuration options and help text"""
+    with st.sidebar:
+        # Center the flag image at the top
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.image("flag.png", use_column_width=True)
+        
+        st.markdown("## Welcome to AI Bill Brief! 👋")
+        st.markdown("""
+        Your AI assistant for exploring Arkansas Legislative Bills from the 2025 Regular Session.
+        
+        ### How to Use 🤔
+        You can ask questions like:
+        - "Tell me about Senate Bill 8"
+        - "What bills has Senator Payton filed?"
+        - "Show me a recent House Bill"
+        - "What's the latest SB?"
+        
+        ### Tips 💡
+        - Be specific with bill numbers (e.g., "SB8" or "HB1056")
+        - You can ask about sponsors using their names
+        - Request recent bills by type (House or Senate)
+        
+        ### Official Resources 📚
+        For official bill information, visit:
+        [Arkansas State Legislature](https://arkleg.state.ar.us/?ddBienniumSession=2025%2F2025R)
+        
+        ### Disclaimer ⚠️
+        This is an AI assistant for informational purposes only. Always verify information through official sources.
+        """)
+        
+        st.divider()
+        
+        # Debug mode toggle
+        st.session_state.debug = st.checkbox("Debug Mode", value=False)
+        
+        # Number of chunks slider
+        st.session_state.num_retrieved_chunks = st.slider(
+            "Max Chunks Retrieved",
+            min_value=1,
+            max_value=10,
+            value=5,
+            help="Maximum number of text chunks to retrieve per query"
         )
 
 def load_bills_to_snowflake():
@@ -372,116 +862,26 @@ def load_bills_to_snowflake():
         print(f"Error type: {type(e)}")
         print(f"Traceback: {traceback.format_exc()}")
         
-def create_prompt(user_question):
-    """Create prompt for the language model"""
-    # Get current bill statistics
-    bill_stats = get_bill_stats(session)
-    
-    if st.session_state.use_chat_history:
-        chat_history = get_chat_history()
-        if chat_history != []:
-            prompt_context, results = query_cortex_search_service(
-                user_question,
-                columns=["chunk", "source_file"],
-                filter={}
-            )
-        else:
-            prompt_context, results = query_cortex_search_service(
-                user_question,
-                columns=["chunk", "source_file"],
-                filter={}
-            )
-            chat_history = ""
-
-    # Process context to include bill links
-    processed_context = prompt_context
-    if results:
-        for result in results:
-            if 'source_file' in result:
-                bill_name = result['source_file'].replace('.pdf', '')
-                bill_ref = format_bill_reference(bill_name)
-                processed_context = processed_context.replace(bill_name, bill_ref)
-
-    prompt = f"""
-            [INST]
-            You are a helpful AI assistant specifically focused on Arkansas legislative bills filed for the 2025 session. Your purpose is to help users understand and navigate these bills.
-
-            Current Bill Statistics:
-            - Total Bills Filed: {bill_stats['total_bills']}
-            - Latest Filing Date: {bill_stats['latest_file_date']}
-
-            IMPORTANT RESPONSE GUIDELINES:
-            1. ONLY answer questions about Arkansas legislative bills for the 2025 session
-            2. If a user asks about:
-               - Bills from other states
-               - Federal legislation
-               - Past Arkansas sessions
-               - Any non-legislative topics
-               Respond with: "I'm specifically designed to help with Arkansas legislative bills for the 2025 session. That topic is outside my scope. 
-               Would you like to know:
-               - How many bills have been filed so far?
-               - What bills were filed this week?
-               - Information about a specific bill?"
-            3. For valid questions, use the context provided between <context> tags and chat history between <chat_history> tags
-            4. Never say "according to the provided context" or similar phrases
-            5. For questions about bill counts or statistics, use the Current Bill Statistics provided above
-            6. If you can't find information about a specific bill in the context, say "I don't have information about that specific bill in my current database."
-            7. When referring to bills, use the markdown link format provided in the context. For example: [SB1](URL)
-
-            <chat_history>
-            {chat_history}
-            </chat_history>
-            <context>
-            {processed_context}
-            </context>
-            <question>
-            {user_question}
-            </question>
-            [/INST]
-            Answer:
-            """
-    return prompt, results
-
-def get_bill_url(bill_name):
-    """Generate URL for a bill"""
-    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}.pdf"
-
-def format_bill_reference(bill_name):
-    """Format a bill reference with its URL"""
-    url = get_bill_url(bill_name)
-    return f"[{bill_name}]({url})"
-
-def get_chat_history():
-    """Get chat history"""
-    start_index = max(
-        0, len(st.session_state.messages) - st.session_state.num_chat_messages
-    )
-    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
-
-def complete(model, prompt):
-    """Generate completion using Snowflake"""
-    return Complete(model, prompt, session=session).replace("$", "\$")
-
 def main():
-    st.title("AR Legislative AI Bill Bot ")
-    st.markdown("""
-    ### Welcome! Ask me anything about bills filed for the upcoming 2025 session! 
-    I'm here to help you understand and navigate through Arkansas legislative bills.
-    """)
-
+    """Main function to run the Streamlit app"""
     # Initialize session state
     init_session_state()
-
-    # Initialize Snowflake
+    
+    # Initialize Snowflake session
     global session
     session = get_snowflake_session()
     
-    # Get service metadata
+    if not session:
+        st.error("❌ Failed to connect to the database. Please check your credentials and try again.")
+        return
+    
+    # Load service metadata
     st.session_state.service_metadata = get_service_metadata(session)
     
     # Initialize UI components
-    init_config_options()
-
+    init_sidebar()
+    init_main_container()
+    
     # Display chat messages from history on app rerun
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
