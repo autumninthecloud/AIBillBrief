@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from snowflake.snowpark import Session
 from snowflake.core import Root
 from snowflake.cortex import Complete
-from local_pdf_processor import LocalPDFProcessor
+# from local_pdf_processor import LocalPDFProcessor
 import json
 import re
 
@@ -116,7 +116,7 @@ def get_row_value(row, column):
     """Safely get a value from a Snowflake row object"""
     try:
         # Try direct attribute access
-        return getattr(row, column.upper(), None)
+        return getattr(row, column, None)
     except:
         try:
             # Try dictionary-style access
@@ -152,12 +152,13 @@ def get_recent_bills(_session):
         
     try:
         return _session.sql("""
-            SELECT DISTINCT source_file, bill_subtitle, bill_sponsor, date_filed
+            SELECT DISTINCT "source_file", "bill_subtitle", "bill_sponsor", "date_filed"
             FROM BILL_CHUNKS
-            ORDER BY date_filed DESC
+            ORDER BY "date_filed" DESC
             LIMIT 5
         """).collect()
     except Exception as e:
+        print(f"Error getting recent bills: {str(e)}")
         if st.session_state.debug:
             st.error(f"Error getting recent bills: {str(e)}")
         return []
@@ -171,8 +172,8 @@ def get_bill_stats(_session):
     try:
         stats = _session.sql("""
             SELECT 
-                COUNT(DISTINCT source_file) as total_bills,
-                MAX(date_filed) as latest_file_date
+                COUNT(DISTINCT "source_file") as total_bills,
+                MAX("date_filed") as latest_file_date
             FROM BILL_CHUNKS
         """).collect()
         if stats and len(stats) > 0:
@@ -218,7 +219,7 @@ def query_cortex_search_service(query, columns=None, filter=None):
     """Query the cortex search service"""
     if columns is None:
         # For now, just get the essential columns since we'll extract other info from chunk
-        columns = ["chunk", "source_file", "chunk_index"]
+        columns = ["'chunk'", "source_file", "chunk_index"]
     
     try:
         # First, let's check what's in the database
@@ -230,15 +231,25 @@ def query_cortex_search_service(query, columns=None, filter=None):
         if st.session_state.debug:
             st.sidebar.write("Total rows in BILL_CHUNKS:", get_row_value(row_count[0], 'ROW_COUNT'))
         
-        # Check what bills are available
-        check_sql = """
-            SELECT DISTINCT source_file
-            FROM BILL_CHUNKS
-            ORDER BY source_file;
-        """
-        available_bills = session.sql(check_sql).collect()
+        try:
+            # Check what bills are available
+            check_sql = """
+                SELECT DISTINCT "source_file"
+                FROM BILL_CHUNKS
+                ORDER BY "source_file";
+            """
+            available_bills = session.sql(check_sql).collect()
+            # print("available_bills", available_bills)
+        except Exception as e:
+            print("error 127")
+            print(f"Error getting available bills: {str(e)}")
+            if st.session_state.debug:
+                st.sidebar.write(f"Error getting available bills: {str(e)}")
+            return [], []
+        
+        # Display available bills
         if st.session_state.debug:
-            st.sidebar.write("Available bills:", [get_row_value(r, 'SOURCE_FILE') for r in available_bills])
+            st.sidebar.write("Available bills:", [get_row_value(r, "source_file") for r in available_bills])
         
         # Build query
         select_cols = ", ".join(columns)  # This ensures we get all needed columns
@@ -267,25 +278,32 @@ def query_cortex_search_service(query, columns=None, filter=None):
             if st.session_state.debug:
                 st.sidebar.write(f"Looking for {bill_type} bills")
             
-            # Get the most recent bill of this type
-            query_sql = f"""
-                WITH RankedBills AS (
-                    SELECT DISTINCT source_file,
-                           ROW_NUMBER() OVER (ORDER BY source_file DESC) as rn
-                    FROM BILL_CHUNKS
-                    WHERE source_file LIKE '{bill_type}%'
-                )
-                SELECT b.chunk, b.source_file, b.chunk_index
-                FROM BILL_CHUNKS b
-                INNER JOIN RankedBills r ON r.source_file = b.source_file
-                WHERE r.rn = 1
-                ORDER BY b.chunk_index;
-            """
+            try:
+                # Get the most recent bill of this type
+                query_sql = f"""
+                    WITH RankedBills AS (
+                        SELECT DISTINCT "source_file",
+                            ROW_NUMBER() OVER (ORDER BY "source_file" DESC) as rn
+                        FROM BILL_CHUNKS
+                        WHERE "source_file" LIKE '{bill_type}%'
+                    )
+                    SELECT b."chunk", b."source_file", b."chunk_index"
+                    FROM BILL_CHUNKS b
+                    INNER JOIN RankedBills r ON r."source_file" = b."source_file"
+                    WHERE r.rn = 1
+                    ORDER BY b."chunk_index";
+                """
+            except Exception as e:
+                print("error 125")
+                print(f"Error getting most recent {bill_type} bill: {str(e)}")
+                if st.session_state.debug:
+                    st.sidebar.write(f"Error getting most recent {bill_type} bill: {str(e)}")
+                return []
             
         else:
             # Check for sponsor query patterns
             sponsor_patterns = [
-                r'(?:bills? (?:by|from|sponsored by)|what (?:bills|else) (?:has|have|did))?\s*(?:senator[s]?\s+[^\\n]+)',
+                r'(?:bills? (?:by|from|sponsored by)|what (?:bills|else) (?:has|have|did))?\s*(?:senator[s]?\s+([a-zA-Z.\s-]+))',
                 r'(?:what|any|other)\s+bills?\s+(?:by|from|sponsored by)\s+([a-zA-Z.\s-]+?)(?:\s+(?:sponsor|file|author)|[?.,]|$)'
             ]
             
@@ -303,31 +321,32 @@ def query_cortex_search_service(query, columns=None, filter=None):
                 # Get bills where first chunk contains the sponsor
                 query_sql = f"""
                     WITH RankedChunks AS (
-                        SELECT chunk, source_file, chunk_index,
-                               ROW_NUMBER() OVER (PARTITION BY source_file ORDER BY chunk_index) as rn
+                        SELECT "chunk", "source_file", "chunk_index",
+                               ROW_NUMBER() OVER (PARTITION BY "source_file" ORDER BY "chunk_index") as rn
                         FROM BILL_CHUNKS
                     )
-                    SELECT DISTINCT b.chunk, b.source_file, b.chunk_index
+                    SELECT DISTINCT b."chunk", b."source_file", b."chunk_index"
                     FROM BILL_CHUNKS b
-                    INNER JOIN RankedChunks r ON r.source_file = b.source_file
+                    INNER JOIN RankedChunks r ON r."source_file" = b."source_file"
                     WHERE r.rn = 1 
-                    AND r.chunk LIKE '%By:%'
-                    AND r.chunk LIKE '%{sponsor_name}%'
-                    ORDER BY b.source_file, b.chunk_index;
+                    AND r."chunk" LIKE '%By:%'
+                    AND r."chunk" LIKE '%{sponsor_name}%'
+                    ORDER BY b."source_file", b."chunk_index";
                 """
                 
             else:
                 # Extract specific bill number from query
                 bill_patterns = [
-                    r'\b(SB|sb|Senate Bill|senate bill)\s*(\d+)\b',
-                    r'\b(HB|hb|House Bill|house bill)\s*(\d+)\b'
+                    # House Bills
+                    (r'\b(SB|sb|Senate Bill|senate bill)\s*(\d+)\b', 'SB'),
+                    (r'\b(HB|hb|House Bill|house bill)\s*(\d+)\b', 'HB')
                 ]
                 
                 bill_query = None
-                for pattern in bill_patterns:
+                for pattern, btype in bill_patterns:
                     match = re.search(pattern, query, re.IGNORECASE)
                     if match:
-                        prefix = 'SB' if match.group(1).upper() in ['SB', 'SENATE BILL'] else 'HB'
+                        prefix = match.group(1).upper()
                         number = match.group(2)
                         bill_query = f"{prefix}{number}"
                         break
@@ -337,21 +356,21 @@ def query_cortex_search_service(query, columns=None, filter=None):
                         st.sidebar.write(f"Extracted bill number: {bill_query}")
                     
                     query_sql = f"""
-                        SELECT {select_cols}
-                        FROM BILL_CHUNKS
-                        WHERE UPPER(source_file) LIKE '%{bill_query.upper()}.PDF%'
+                        SELECT b."chunk", b."source_file", b."chunk_index"
+                        FROM BILL_CHUNKS b
+                        WHERE UPPER(b."source_file") LIKE '%{bill_query.upper()}.PDF%'
                         {where_clause}
-                        ORDER BY chunk_index
+                        ORDER BY b."chunk_index"
                         LIMIT {st.session_state.num_retrieved_chunks}
                     """
                 else:
                     # Use text search as last resort
                     query_sql = f"""
-                        SELECT {select_cols}
-                        FROM BILL_CHUNKS
-                        WHERE CONTAINS(chunk, '{query}')
+                        SELECT b."chunk", b."source_file", b."chunk_index"
+                        FROM BILL_CHUNKS b
+                        WHERE CONTAINS(b."chunk", '{query}')
                         {where_clause}
-                        ORDER BY chunk_index
+                        ORDER BY b."chunk_index"
                         LIMIT {st.session_state.num_retrieved_chunks}
                     """
         
@@ -387,13 +406,13 @@ def query_cortex_search_service(query, columns=None, filter=None):
                         st.sidebar.write(f"{col}: {get_row_value(r, col)}")
                 
                 # Extract bill info from chunk
-                chunk_text = get_row_value(r, 'CHUNK')
+                chunk_text = get_row_value(r, "chunk")
                 if not chunk_text:
                     if st.session_state.debug:
                         st.error("No chunk text found in result")
                     continue
                     
-                bill_name = get_row_value(r, 'SOURCE_FILE')
+                bill_name = get_row_value(r, 'source_file')
                 if bill_name:
                     bill_name = bill_name.replace('.pdf', '')
                 else:
@@ -413,6 +432,8 @@ def query_cortex_search_service(query, columns=None, filter=None):
                 bill_chunks.append(chunk_text)
                 
             except Exception as e:
+                print("error 123")
+                print(f"Error formatting result: {str(e)}")
                 if st.session_state.debug:
                     st.error(f"Error formatting result: {str(e)}")
                     st.sidebar.write("Available columns:", columns)
@@ -441,6 +462,8 @@ def query_cortex_search_service(query, columns=None, filter=None):
         return "\n---\n".join(context_parts), results
         
     except Exception as e:
+        print("error 124")
+        print(f"Search error: {str(e)}", e.with_traceback(None))
         if st.session_state.debug:
             st.error(f"Search error: {str(e)}")
             st.sidebar.write("Full error:", str(e))
@@ -532,7 +555,7 @@ def create_prompt(user_question):
     processed_context = prompt_context
     if results:
         for result in results:
-            if 'source_file' in result:
+            if 'SOURCE_FILE' in result:
                 bill_name = get_row_value(result, 'SOURCE_FILE')
                 if bill_name:
                     bill_name = bill_name.replace('.pdf', '')
@@ -814,6 +837,7 @@ def load_bills_to_snowflake():
     """
     Process all PDFs in the bills directory and load them into Snowflake
     """
+    print("Loading bills to Snowflake...")
     try:
         print("Starting bill loading process...")
         

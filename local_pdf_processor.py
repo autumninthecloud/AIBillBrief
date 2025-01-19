@@ -127,8 +127,9 @@ class LocalPDFProcessor:
             print(f"Traceback: {traceback.format_exc()}")
             return None
 
-# Example usage
-pdf_folder = 'bills'
-output_folder = 'csv_files'
-processor = LocalPDFProcessor(pdf_folder, output_folder)
-processor.process_pdfs()
+if __name__ == '__main__':
+    # Example usage
+    pdf_folder = 'bills'
+    output_folder = 'csv_files'
+    processor = LocalPDFProcessor(pdf_folder, output_folder)
+    processor.process_pdfs()
