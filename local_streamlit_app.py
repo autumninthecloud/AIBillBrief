@@ -559,19 +559,26 @@ class Complete:
 
     def __str__(self):
         try:
-            # First, let's check what ML functions are available
+            # Check current database and schema
             check_sql = """
-            SHOW USER FUNCTIONS LIKE '%COMPLETE%';
+            SELECT CURRENT_DATABASE(), CURRENT_SCHEMA();
             """
             result = self.session.sql(check_sql).collect()
-            st.write("Available functions:", result)
+            st.write("Current database and schema:", result)
+            
+            # Show available databases
+            check_sql = """
+            SHOW DATABASES;
+            """
+            result = self.session.sql(check_sql).collect()
+            st.write("Available databases:", result)
             
             # Escape single quotes in the prompt
             escaped_prompt = self.prompt.replace("'", "''")
             
             # Create SQL query to call the language model
             sql = f"""
-            SELECT ML.COMPLETE(
+            SELECT COMPLETE(
                 '{self.model}',
                 '{escaped_prompt}',
                 {{'max_tokens': 2000, 'temperature': 0.7}}
