@@ -734,16 +734,17 @@ def complete(prompt, session=None):
                     break
 
         # Create a concise summary
-        summary = f"""
-{bill_ref} was filed on {filing_date} by {sponsor}.
+        summary = f"""{bill_ref} was filed on {filing_date} by {sponsor}.
 
 Purpose: {title}
 
 Key Points:
 """
-        # Add key points with bullet points
-        for point in key_points:
-            summary += f"• {point}\n"
+        # Add key points with bullet points, ensuring each starts on a new line
+        if key_points:
+            summary += '\n'.join(f"• {point}" for point in key_points)
+        else:
+            summary += "• No additional key points found"
 
         return summary.strip()
 
