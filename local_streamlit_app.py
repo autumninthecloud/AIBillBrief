@@ -654,38 +654,33 @@ def create_prompt(user_question):
             """
     return prompt, results
 
-def complete(model, prompt, session=None):
-    """Generate completion using Snowpark Session."""
+def complete(prompt, session=None):
+    """Generate completion using Cortex Search Service."""
     try:
         if session is None:
             session = get_snowflake_session()
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
-        
-        # Check what functions are available
-        sql = """
-        SHOW USER FUNCTIONS IN SCHEMA SNOW_PDF.PUBLIC;
+
+        # Construct the query to the Cortex Search Service
+        query = f"""
+        SELECT chunk, relative_path, file_url, language
+        FROM bill_cortex_search
+        WHERE CONTAINS(chunk, '{prompt}')
         """
-        functions = session.sql(sql).collect()
-        st.write("Available functions:", functions)
-        
-        # Check what procedures are available
-        sql = """
-        SHOW PROCEDURES IN SCHEMA SNOW_PDF.PUBLIC;
-        """
-        procedures = session.sql(sql).collect()
-        st.write("Available procedures:", procedures)
-        
-        # Check what external functions are available
-        sql = """
-        SHOW EXTERNAL FUNCTIONS IN SCHEMA SNOW_PDF.PUBLIC;
-        """
-        external = session.sql(sql).collect()
-        st.write("Available external functions:", external)
-        
-        # For now return a placeholder
-        return "Checking available functions... Please check the debug output above."
-        
+
+        # Execute the query
+        results = session.sql(query).collect()
+
+        # Process the results
+        if not results:
+            return "No relevant information found."
+
+        # Example: Concatenate chunks for a simple summary
+        summary = " ".join([row['chunk'] for row in results])
+
+        return summary
+
     except Exception as e:
         error_msg = f"Error in language model completion: {str(e)}"
         st.error(error_msg)
