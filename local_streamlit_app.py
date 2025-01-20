@@ -652,23 +652,17 @@ def get_chat_history():
     )
     return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
 
-def complete(model, prompt, session=None):
-    """Generate completion using Snowpark Session."""
+def complete(model, prompt):
+    """Generate completion using Snowflake"""
     try:
-        if session is None:
-            session = get_snowflake_session()
-            if session is None:
-                raise ValueError("Could not establish Snowflake session")
-        
         # Escape single quotes in the prompt
         escaped_prompt = prompt.replace("'", "''")
         
         # Create SQL query to call the language model
         sql = f"""
-        SELECT SYSTEM$GENERATE_TEXT(
-            '{model}',  -- model name
-            '{escaped_prompt}',  -- prompt
-            {{'max_tokens': 2000, 'temperature': 0.7}}  -- parameters
+        SELECT llm.generate_text(
+            '{escaped_prompt}',
+            {{'temperature': 0.7, 'max_tokens': 2000}}
         )
         """
         
@@ -1005,7 +999,7 @@ def main():
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
                     generated_response = complete(
-                        st.session_state.model_name, prompt, session
+                        st.session_state.model_name, prompt
                     )
                 
                 # Display the response
