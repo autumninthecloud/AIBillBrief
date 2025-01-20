@@ -170,7 +170,7 @@ def get_bill_stats(_session):
     try:
         stats = _session.sql("""
             SELECT 
-                COUNT(DISTINCT source_file) as TOTAL_BILLS,
+                COUNT(DISTINCT "source_file") as TOTAL_BILLS,
                 MAX("date_filed") as latest_file_date
             FROM BILL_CHUNKS
         """).collect()
