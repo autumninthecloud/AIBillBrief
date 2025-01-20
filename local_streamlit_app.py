@@ -546,40 +546,7 @@ def format_bill_header(bill_name, bill_info):
     
     return "\n\n".join(header_parts)
 
-def complete(model, prompt, session=None):
-    """Generate completion using Snowpark Session."""
-    try:
-        if session is None:
-            session = get_snowflake_session()
-            if session is None:
-                raise ValueError("Could not establish Snowflake session")
-        
-        # Escape single quotes in the prompt
-        escaped_prompt = prompt.replace("'", "''")
-        
-        # Create SQL query to call the language model
-        sql = f"""
-        SELECT SYSTEM$GENERATE_TEXT(
-            '{model}',  -- model name
-            '{escaped_prompt}',  -- prompt
-            {{'max_tokens': 2000, 'temperature': 0.7}}  -- parameters
-        )
-        """
-        
-        # Execute the query and get result
-        result = session.sql(sql).collect()
-        
-        if not result or len(result) == 0:
-            raise ValueError("No response from language model")
-            
-        # Extract and sanitize the response
-        response = result[0][0]
-        return response.replace("$", "\$")
-    
-    except Exception as e:
-        error_msg = f"Error in language model completion: {str(e)}"
-        st.error(error_msg)
-        return error_msg
+
 
 def get_bill_url(bill_name):
     """Generate URL for a bill"""
