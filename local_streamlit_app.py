@@ -972,6 +972,7 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
+                    st.session_state.messages.append({"role": "assistant", "content": prompt})
                     # generated_response = complete(
                     #     st.session_state.model_name, prompt
                     # )
