@@ -976,9 +976,8 @@ def main():
                     #     st.session_state.model_name, prompt
                     # )
                 
-                generated_response = results[0]
                 # Display the response
-                message_placeholder.markdown(generated_response)
+                message_placeholder.markdown(results)
                 
                 # Add to chat history
                 st.session_state.messages.append(
