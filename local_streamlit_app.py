@@ -668,7 +668,6 @@ def complete(prompt, session=None):
         match = re.search(r'<question>\s*(.*?)\s*</question>', prompt, re.DOTALL)
         if match:
             search_query = match.group(1).strip()
-            # Clean the query
             search_query = search_query.replace("'", "''")
         else:
             search_query = prompt.replace("'", "''")
@@ -683,33 +682,70 @@ def complete(prompt, session=None):
         if not results:
             return "I don't have any relevant information about that in my current database."
 
-        # Group results by source file and sort by chunk index
-        grouped_results = {}
+        # Combine all chunks to get complete bill text
+        all_chunks = []
         for result in results:
             result_dict = result.as_dict()
-            source = result_dict.get('SOURCE_FILE', result_dict.get('source_file', 'Unknown'))
             chunk = result_dict.get('CHUNK', result_dict.get('chunk', ''))
-            chunk_index = result_dict.get('CHUNK_INDEX', result_dict.get('chunk_index', 0))
-            
-            if source not in grouped_results:
-                grouped_results[source] = []
-            grouped_results[source].append((chunk_index, chunk))
+            all_chunks.append(chunk)
+        full_text = ' '.join(all_chunks)
 
-        # Process results by file, maintaining chunk order
-        response_parts = []
-        for source, chunks in grouped_results.items():
-            # Sort chunks by index
-            chunks.sort(key=lambda x: x[0])
-            
-            # Format bill reference once per file
-            bill_name = source.replace('.pdf', '')
-            bill_ref = format_bill_reference(bill_name)
-            
-            # Combine chunks for this file
-            file_chunks = [chunk for _, chunk in chunks]
-            response_parts.append(f"According to {bill_ref}:\n{' '.join(file_chunks)}")
+        # Extract basic bill information
+        first_result = results[0].as_dict()
+        source = first_result.get('SOURCE_FILE', first_result.get('source_file', 'Unknown'))
+        bill_name = source.replace('.pdf', '')
+        bill_ref = format_bill_reference(bill_name)
 
-        return "\n\n".join(response_parts)
+        # Extract bill details
+        sponsor_match = re.search(r'By:\s*(Senator|Representative)\s+(.*?)\s*\d', full_text)
+        sponsor = sponsor_match.group(2) if sponsor_match else "Unknown"
+        
+        title_match = re.search(r'AN ACT (?:TO|FOR)\s+(.*?)(?:\.|;|\d)', full_text, re.DOTALL)
+        title = title_match.group(1).strip() if title_match else ""
+        
+        date_match = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
+        filing_date = date_match.group(1) if date_match else "Unknown date"
+
+        # Extract key points based on bill sections
+        key_points = []
+        
+        # Look for appropriation amounts
+        money_match = re.search(r'\$\s*([\d,]+(?:\.\d{2})?)', full_text)
+        if money_match:
+            amount = money_match.group(1)
+            key_points.append(f"Appropriates ${amount}")
+
+        # Look for date ranges
+        date_range = re.search(r'in effect (?:only )?from (.*?) through (.*?)\.', full_text)
+        if date_range:
+            key_points.append(f"Effective period: {date_range.group(1)} through {date_range.group(2)}")
+
+        # Check for emergency clause
+        if 'EMERGENCY CLAUSE' in full_text:
+            key_points.append("Contains an emergency clause for immediate effect upon approval")
+
+        # Look for main actions in the bill
+        action_matches = re.finditer(r'(?:shall|to)\s+([^\.]+?)(?:\.|;|\n)', full_text)
+        for match in action_matches:
+            action = match.group(1).strip()
+            if len(action) > 20 and 'this act' not in action.lower():  # Filter out common legal phrases
+                key_points.append(action.capitalize())
+                if len(key_points) >= 5:  # Limit to most important points
+                    break
+
+        # Create a concise summary
+        summary = f"""
+{bill_ref} was filed on {filing_date} by {sponsor}.
+
+Purpose: {title}
+
+Key Points:
+"""
+        # Add key points with bullet points
+        for point in key_points:
+            summary += f"• {point}\n"
+
+        return summary.strip()
 
     except Exception as e:
         error_msg = f"Error in language model completion: {str(e)}"
