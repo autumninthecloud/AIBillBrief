@@ -654,7 +654,33 @@ def get_chat_history():
 
 def complete(model, prompt):
     """Generate completion using Snowflake"""
-    return Complete(model, prompt, session=session).replace("$", "\$")
+    try:
+        # Escape single quotes in the prompt
+        escaped_prompt = prompt.replace("'", "''")
+        
+        # Create SQL query to call the language model
+        sql = f"""
+        CALL SYSTEM$QUERY_LANGUAGE_MODEL(
+            model_name => '{model}',
+            prompt => '{escaped_prompt}',
+            max_tokens => 2000,
+            temperature => 0.7
+        )
+        """
+        
+        # Execute the query
+        result = session.sql(sql).collect()
+        
+        if result and len(result) > 0:
+            # Extract the completion from the result
+            completion = result[0][0]
+            return completion.replace("$", "\$")
+            
+        return "I apologize, but I couldn't generate a response at this time."
+        
+    except Exception as e:
+        st.error(f"Error generating completion: {str(e)}")
+        return f"An error occurred while generating the response: {str(e)}"
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
