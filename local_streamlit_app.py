@@ -652,35 +652,40 @@ def get_chat_history():
     )
     return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
 
-def complete(model, prompt):
-    """Generate completion using Snowflake"""
+def complete(model, prompt, session=None):
+    """Generate completion using Snowpark Session."""
     try:
+        if session is None:
+            session = get_snowflake_session()
+            if session is None:
+                raise ValueError("Could not establish Snowflake session")
+        
         # Escape single quotes in the prompt
         escaped_prompt = prompt.replace("'", "''")
         
         # Create SQL query to call the language model
         sql = f"""
-        CALL SYSTEM$QUERY_LANGUAGE_MODEL(
-            model_name => '{model}',
-            prompt => '{escaped_prompt}',
-            max_tokens => 2000,
-            temperature => 0.7
+        SELECT SYSTEM$GENERATE_TEXT(
+            '{model}',  -- model name
+            '{escaped_prompt}',  -- prompt
+            {{'max_tokens': 2000, 'temperature': 0.7}}  -- parameters
         )
         """
         
-        # Execute the query
+        # Execute the query and get result
         result = session.sql(sql).collect()
         
-        if result and len(result) > 0:
-            # Extract the completion from the result
-            completion = result[0][0]
-            return completion.replace("$", "\$")
+        if not result or len(result) == 0:
+            raise ValueError("No response from language model")
             
-        return "I apologize, but I couldn't generate a response at this time."
-        
+        # Extract and sanitize the response
+        response = result[0][0]
+        return response.replace("$", "\$")
+    
     except Exception as e:
-        st.error(f"Error generating completion: {str(e)}")
-        return f"An error occurred while generating the response: {str(e)}"
+        error_msg = f"Error in language model completion: {str(e)}"
+        st.error(error_msg)
+        return error_msg
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
@@ -1000,7 +1005,7 @@ def main():
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
                     generated_response = complete(
-                        st.session_state.model_name, prompt
+                        st.session_state.model_name, prompt, session
                     )
                 
                 # Display the response
