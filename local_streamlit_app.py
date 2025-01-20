@@ -164,6 +164,7 @@ def get_recent_bills(_session):
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_bill_stats(_session):
     """Get cached bill statistics"""
+    st.write(_session)
     if not _session:
         return {'total_bills': 0, 'latest_file_date': None}
         
