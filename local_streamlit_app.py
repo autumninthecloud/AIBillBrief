@@ -693,7 +693,7 @@ def get_chat_history():
 
 def complete(model, prompt):
     """Generate completion using Snowflake"""
-    return Complete(model, prompt, session=session).replace("$", "\$")
+    return str(Complete(model, prompt, session=session)).replace("$", "\$")
 
 def init_session_state():
     """Initialize all session state variables"""
