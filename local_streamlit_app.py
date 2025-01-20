@@ -981,7 +981,7 @@ def main():
                 
                 # Add to chat history
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": generated_response}
+                    {"role": "assistant", "content": results}
                 )
 
 if __name__ == "__main__":
