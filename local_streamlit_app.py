@@ -676,27 +676,38 @@ def complete(prompt, session=None):
         # Use the existing query_cortex_search_service function
         context, results = query_cortex_search_service(
             search_query,
-            columns=["chunk", "source_file"],
+            columns=["chunk", "source_file", "chunk_index"],
             filter=None
         )
 
         if not results:
             return "I don't have any relevant information about that in my current database."
 
-        # Process the results into a response
-        response_parts = []
+        # Group results by source file and sort by chunk index
+        grouped_results = {}
         for result in results:
-            # Convert Snowpark Row to dict for easier handling
             result_dict = result.as_dict()
-            
-            # Try both upper and lower case column names
-            chunk = result_dict.get('CHUNK', result_dict.get('chunk', ''))
             source = result_dict.get('SOURCE_FILE', result_dict.get('source_file', 'Unknown'))
+            chunk = result_dict.get('CHUNK', result_dict.get('chunk', ''))
+            chunk_index = result_dict.get('CHUNK_INDEX', result_dict.get('chunk_index', 0))
             
-            if chunk and source:
-                bill_name = source.replace('.pdf', '')
-                bill_ref = format_bill_reference(bill_name)
-                response_parts.append(f"According to {bill_ref}:\n{chunk}")
+            if source not in grouped_results:
+                grouped_results[source] = []
+            grouped_results[source].append((chunk_index, chunk))
+
+        # Process results by file, maintaining chunk order
+        response_parts = []
+        for source, chunks in grouped_results.items():
+            # Sort chunks by index
+            chunks.sort(key=lambda x: x[0])
+            
+            # Format bill reference once per file
+            bill_name = source.replace('.pdf', '')
+            bill_ref = format_bill_reference(bill_name)
+            
+            # Combine chunks for this file
+            file_chunks = [chunk for _, chunk in chunks]
+            response_parts.append(f"According to {bill_ref}:\n{' '.join(file_chunks)}")
 
         return "\n\n".join(response_parts)
 
