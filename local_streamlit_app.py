@@ -683,8 +683,6 @@ def complete(prompt, session=None):
         )
 
         st.write("Debug - Got results:", len(results) if results else 0)
-        if results:
-            st.write("Debug - First result keys:", results[0].keys() if results else "No keys")
 
         if not results:
             return "I don't have any relevant information about that in my current database."
@@ -692,9 +690,14 @@ def complete(prompt, session=None):
         # Process the results into a response
         response_parts = []
         for result in results:
-            st.write("Debug - Processing result:", result)
-            chunk = result.get('CHUNK', result.get('chunk', ''))
-            source = result.get('SOURCE_FILE', result.get('source_file', 'Unknown'))
+            # Convert Snowpark Row to dict for easier handling
+            result_dict = result.as_dict()
+            st.write("Debug - Processing result:", result_dict)
+            
+            # Try both upper and lower case column names
+            chunk = result_dict.get('CHUNK', result_dict.get('chunk', ''))
+            source = result_dict.get('SOURCE_FILE', result_dict.get('source_file', 'Unknown'))
+            
             if chunk and source:
                 bill_name = source.replace('.pdf', '')
                 bill_ref = format_bill_reference(bill_name)
