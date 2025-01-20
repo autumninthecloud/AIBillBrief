@@ -662,33 +662,28 @@ def complete(prompt, session=None):
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
 
-        # Clean and escape the prompt for SQL
-        escaped_prompt = prompt.replace("'", "''").replace('"', '""')
+        # Use the existing query_cortex_search_service function
+        context, results = query_cortex_search_service(
+            prompt,
+            columns=["chunk", "source_file"],
+            filter=None
+        )
 
-        # Construct the query to the Cortex Search Service
-        query = f"""
-        SELECT *
-        FROM bill_cortex_search
-        WHERE SEARCH_PHRASE(chunk, '{escaped_prompt}')
-        ORDER BY RELEVANCE DESC
-        LIMIT 5
-        """
-
-        # Execute the query
-        results = session.sql(query).collect()
-
-        # Process the results
         if not results:
-            return "No relevant information found."
+            return "I don't have any relevant information about that in my current database."
 
-        # Example: Concatenate chunks for a simple summary
-        chunks = []
-        for row in results:
-            chunk = row['CHUNK'] if 'CHUNK' in row else row['chunk']
-            chunks.append(chunk)
-        
-        summary = "\n\n".join(chunks)
-        return summary
+        # Process the results into a response
+        response_parts = []
+        for result in results:
+            chunk = result.get('CHUNK', result.get('chunk', ''))
+            source = result.get('SOURCE_FILE', result.get('source_file', 'Unknown'))
+            if chunk and source:
+                bill_name = source.replace('.pdf', '')
+                bill_ref = format_bill_reference(bill_name)
+                response_parts.append(f"According to {bill_ref}:\n{chunk}")
+
+        response = "\n\n".join(response_parts)
+        return response
 
     except Exception as e:
         error_msg = f"Error in language model completion: {str(e)}"
