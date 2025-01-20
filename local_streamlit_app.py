@@ -176,6 +176,7 @@ def get_bill_stats(_session):
         """).collect()
         st.write(stats)
         if stats and len(stats) > 0:
+            st.write("made it here")
             return {
                 'total_bills': get_row_value(stats[0], 'TOTAL_BILLS'),
                 'latest_file_date': get_row_value(stats[0], 'LATEST_FILE_DATE')
