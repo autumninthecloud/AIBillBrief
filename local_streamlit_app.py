@@ -546,45 +546,56 @@ def format_bill_header(bill_name, bill_info):
     
     return "\n\n".join(header_parts)
 
-class Complete:
-    """Class to handle language model completions"""
-    def __init__(self, model, prompt, session=None):
-        self.model = model
-        self.prompt = prompt
-        self.session = session
+def complete(model, prompt, session=None):
+    """Generate completion using Snowpark Session."""
+    try:
         if session is None:
-            self.session = get_snowflake_session()
-            if self.session is None:
+            session = get_snowflake_session()
+            if session is None:
                 raise ValueError("Could not establish Snowflake session")
-
-    def __str__(self):
-        try:
-            # Escape single quotes in the prompt
-            escaped_prompt = self.prompt.replace("'", "''")
-            
-            # Create SQL query to call the language model
-            sql = f"""
-            CALL SPROC_GENERATE_TEXT(
-                input_text => '{escaped_prompt}',
-                model => '{self.model}',
-                max_tokens => 2000,
-                temperature => 0.7
-            )
-            """
-            
-            # Execute the query and get result
-            result = self.session.sql(sql).collect()
-            
-            if not result or len(result) == 0:
-                raise ValueError("No response from language model")
-                
-            # Extract the response
-            return result[0][0]
         
-        except Exception as e:
-            error_msg = f"Error in language model completion: {str(e)}"
-            st.error(error_msg)
-            return error_msg
+        # Escape single quotes in the prompt
+        escaped_prompt = prompt.replace("'", "''")
+        
+        # Create SQL query to call the language model
+        sql = f"""
+        SELECT SYSTEM$GENERATE_TEXT(
+            '{model}',  -- model name
+            '{escaped_prompt}',  -- prompt
+            {{'max_tokens': 2000, 'temperature': 0.7}}  -- parameters
+        )
+        """
+        
+        # Execute the query and get result
+        result = session.sql(sql).collect()
+        
+        if not result or len(result) == 0:
+            raise ValueError("No response from language model")
+            
+        # Extract and sanitize the response
+        response = result[0][0]
+        return response.replace("$", "\$")
+    
+    except Exception as e:
+        error_msg = f"Error in language model completion: {str(e)}"
+        st.error(error_msg)
+        return error_msg
+
+def get_bill_url(bill_name):
+    """Generate URL for a bill"""
+    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}.pdf"
+
+def format_bill_reference(bill_name):
+    """Format a bill reference with its URL"""
+    url = get_bill_url(bill_name)
+    return f"[{bill_name}]({url})"
+
+def get_chat_history():
+    """Get chat history"""
+    start_index = max(
+        0, len(st.session_state.messages) - st.session_state.num_chat_messages
+    )
+    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
 
 def create_prompt(user_question):
     """Create prompt for the language model"""
@@ -675,26 +686,6 @@ def create_prompt(user_question):
             Answer:
             """
     return prompt, results
-
-def get_bill_url(bill_name):
-    """Generate URL for a bill"""
-    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}.pdf"
-
-def format_bill_reference(bill_name):
-    """Format a bill reference with its URL"""
-    url = get_bill_url(bill_name)
-    return f"[{bill_name}]({url})"
-
-def get_chat_history():
-    """Get chat history"""
-    start_index = max(
-        0, len(st.session_state.messages) - st.session_state.num_chat_messages
-    )
-    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
-
-def complete(model, prompt):
-    """Generate completion using Snowflake"""
-    return str(Complete(model, prompt, session=session)).replace("$", "\$")
 
 def init_session_state():
     """Initialize all session state variables"""
