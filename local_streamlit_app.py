@@ -653,7 +653,7 @@ def get_chat_history():
 
 def complete(model, prompt):
     """Generate completion using Snowflake"""
-    return Complete(model, prompt, session=session).replace("$", "\$")
+    return Complete(model, prompt, session=session)
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
@@ -962,7 +962,7 @@ def main():
         # Display user message in chat message container
         with chat_container:
             with st.chat_message("user"):
-                st.markdown(question.replace("$", "\$"))
+                st.markdown(question)
 
             # Display assistant response in chat message container
             with st.chat_message("assistant"):
