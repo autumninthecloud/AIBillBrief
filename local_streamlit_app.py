@@ -990,9 +990,7 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
-                    #generated_response = complete(
-                       # st.session_state.model_name, prompt
-                    #)
+                    generated_response = "Language model integration is currently disabled."
                 
                 # Display the response
                 message_placeholder.markdown(generated_response)
