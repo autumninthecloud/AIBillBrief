@@ -4,7 +4,6 @@ import pandas as pd
 import traceback
 from dotenv import load_dotenv
 from snowflake.snowpark import Session
-from snowflake.cortex import Complete
 import json
 import re
 import sys
