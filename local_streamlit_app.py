@@ -654,24 +654,40 @@ def create_prompt(user_question):
             """
     return prompt, results
 
-def init_session_state():
-    """Initialize all session state variables"""
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "debug" not in st.session_state:
-        st.session_state.debug = False
-    if "use_chat_history" not in st.session_state:
-        st.session_state.use_chat_history = True
-    if "model_name" not in st.session_state:
-        st.session_state.model_name = "mistral-large2"
-    if "num_retrieved_chunks" not in st.session_state:
-        st.session_state.num_retrieved_chunks = 5
-    if "num_chat_messages" not in st.session_state:
-        st.session_state.num_chat_messages = 10
-    if "service_metadata" not in st.session_state:
-        st.session_state.service_metadata = []
-    if "selected_cortex_search_service" not in st.session_state:
-        st.session_state.selected_cortex_search_service = None
+def complete(model, prompt, session=None):
+    """Generate completion using Snowpark Session."""
+    try:
+        if session is None:
+            session = get_snowflake_session()
+            if session is None:
+                raise ValueError("Could not establish Snowflake session")
+        
+        # Escape single quotes in the prompt
+        escaped_prompt = prompt.replace("'", "''")
+        
+        # Create SQL query to call the language model
+        sql = f"""
+        CALL SYSTEM$GENERATE_TEXT(
+            '{model}',  -- model name
+            '{escaped_prompt}',  -- prompt
+            {{'max_tokens': 2000, 'temperature': 0.7}}  -- parameters
+        )
+        """
+        
+        # Execute the query and get result
+        result = session.sql(sql).collect()
+        
+        if not result or len(result) == 0:
+            raise ValueError("No response from language model")
+            
+        # Extract and sanitize the response
+        response = result[0][0]
+        return response.replace("$", "\$")
+    
+    except Exception as e:
+        error_msg = f"Error in language model completion: {str(e)}"
+        st.error(error_msg)
+        return error_msg
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
@@ -990,7 +1006,9 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
-                    generated_response = "Language model integration is currently disabled."
+                    generated_response = complete(
+                        st.session_state.model_name, prompt, session
+                    )
                 
                 # Display the response
                 message_placeholder.markdown(generated_response)
