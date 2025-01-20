@@ -4,11 +4,9 @@ import pandas as pd
 import traceback
 from dotenv import load_dotenv
 from snowflake.snowpark import Session
-from snowflake.core import Root
-from snowflake.cortex import Complete
-# from local_pdf_processor import LocalPDFProcessor
 import json
 import re
+import sys
 
 # Set page config at the very start
 st.set_page_config(
@@ -255,114 +253,128 @@ def query_cortex_search_service(query, columns=None, filter=None):
         select_cols = ", ".join(columns)  # This ensures we get all needed columns
         where_clause = f"AND {filter}" if filter else ""
         
-        # Check for general bill type queries first
-        bill_type_patterns = [
-            # House Bills
-            (r'(?:recent|latest|any|tell|show|about|summary).*(?:house bill|hb)s?', 'HB'),
-            (r'(?:house bill|hb)s?.*(?:recent|latest|filed|new)', 'HB'),
+        # Extract specific bill number from query first
+        bill_patterns = [
             # Senate Bills
-            (r'(?:recent|latest|any|tell|show|about|summary).*(?:senate bill|sb)s?', 'SB'),
-            (r'(?:senate bill|sb)s?.*(?:recent|latest|filed|new)', 'SB'),
-            # Fallback patterns
-            (r'\b(?:house bill|hb)s?\b', 'HB'),
-            (r'\b(?:senate bill|sb)s?\b', 'SB')
+            (r'\b(SB|sb|Senate Bill|senate bill)\s*(\d+)\b', 'SB'),
+            # House Bills
+            (r'\b(HB|hb|House Bill|house bill)\s*(\d+)\b', 'HB')
         ]
         
-        bill_type = None
-        for pattern, btype in bill_type_patterns:
-            if re.search(pattern, query, re.IGNORECASE):
-                bill_type = btype
+        bill_query = None
+        for pattern, btype in bill_patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                prefix = match.group(1).upper()
+                number = match.group(2)
+                bill_query = f"{btype}{number}"
                 break
         
-        if bill_type:
+        if bill_query:
             if st.session_state.debug:
-                st.sidebar.write(f"Looking for {bill_type} bills")
+                st.sidebar.write(f"Extracted bill number: {bill_query}")
             
-            try:
-                # Get the most recent bill of this type
-                query_sql = f"""
-                    WITH RankedBills AS (
-                        SELECT DISTINCT "source_file",
-                            ROW_NUMBER() OVER (ORDER BY "source_file" DESC) as rn
-                        FROM BILL_CHUNKS
-                        WHERE "source_file" LIKE '{bill_type}%'
-                    )
-                    SELECT b."chunk", b."source_file", b."chunk_index"
-                    FROM BILL_CHUNKS b
-                    INNER JOIN RankedBills r ON r."source_file" = b."source_file"
-                    WHERE r.rn = 1
-                    ORDER BY b."chunk_index";
+            # Debug: Show actual SQL query
+            query_sql = f"""
+                SELECT b."chunk", b."source_file", b."chunk_index"
+                FROM BILL_CHUNKS b
+                WHERE UPPER(b."source_file") = '{bill_query.upper()}.PDF'
+                {where_clause}
+                ORDER BY b."chunk_index"
+                LIMIT {st.session_state.num_retrieved_chunks}
+            """
+            
+            if st.session_state.debug:
+                st.sidebar.write("SQL Query:", query_sql)
+                # Check what's in the table for this bill
+                check_sql = f"""
+                    SELECT COUNT(*) as count
+                    FROM BILL_CHUNKS
+                    WHERE "source_file" = '{bill_query}.PDF'
                 """
-            except Exception as e:
-                print("error 125")
-                print(f"Error getting most recent {bill_type} bill: {str(e)}")
-                if st.session_state.debug:
-                    st.sidebar.write(f"Error getting most recent {bill_type} bill: {str(e)}")
-                return []
-            
+                count_result = session.sql(check_sql).collect()
+                st.sidebar.write(f"Number of chunks found for {bill_query}.PDF:", get_row_value(count_result[0], 'COUNT'))
+        
         else:
-            # Check for sponsor query patterns
-            sponsor_patterns = [
-                r'(?:bills? (?:by|from|sponsored by)|what (?:bills|else) (?:has|have|did))?\s*(?:senator[s]?\s+([a-zA-Z.\s-]+))',
-                r'(?:what|any|other)\s+bills?\s+(?:by|from|sponsored by)\s+([a-zA-Z.\s-]+?)(?:\s+(?:sponsor|file|author)|[?.,]|$)'
+            # Check for general bill type queries
+            bill_type_patterns = [
+                # House Bills
+                (r'(?:recent|latest|any|tell|show|about|summary).*(?:house bill|hb)s?', 'HB'),
+                (r'(?:house bill|hb)s?.*(?:recent|latest|filed|new)', 'HB'),
+                # Senate Bills
+                (r'(?:recent|latest|any|tell|show|about|summary).*(?:senate bill|sb)s?', 'SB'),
+                (r'(?:senate bill|sb)s?.*(?:recent|latest|filed|new)', 'SB'),
+                # Fallback patterns
+                (r'\b(?:house bill|hb)s?\b', 'HB'),
+                (r'\b(?:senate bill|sb)s?\b', 'SB')
             ]
             
-            sponsor_name = None
-            for pattern in sponsor_patterns:
-                match = re.search(pattern, query, re.IGNORECASE)
-                if match:
-                    sponsor_name = match.group(1).strip()
+            bill_type = None
+            for pattern, btype in bill_type_patterns:
+                if re.search(pattern, query, re.IGNORECASE):
+                    bill_type = btype
                     break
-                    
-            if sponsor_name:
+            
+            if bill_type:
                 if st.session_state.debug:
-                    st.sidebar.write(f"Looking for bills by sponsor: {sponsor_name}")
+                    st.sidebar.write(f"Looking for {bill_type} bills")
                 
-                # Get bills where first chunk contains the sponsor
-                query_sql = f"""
-                    WITH RankedChunks AS (
-                        SELECT "chunk", "source_file", "chunk_index",
-                               ROW_NUMBER() OVER (PARTITION BY "source_file" ORDER BY "chunk_index") as rn
-                        FROM BILL_CHUNKS
-                    )
-                    SELECT DISTINCT b."chunk", b."source_file", b."chunk_index"
-                    FROM BILL_CHUNKS b
-                    INNER JOIN RankedChunks r ON r."source_file" = b."source_file"
-                    WHERE r.rn = 1 
-                    AND r."chunk" LIKE '%By:%'
-                    AND r."chunk" LIKE '%{sponsor_name}%'
-                    ORDER BY b."source_file", b."chunk_index";
-                """
-                
-            else:
-                # Extract specific bill number from query
-                bill_patterns = [
-                    # House Bills
-                    (r'\b(SB|sb|Senate Bill|senate bill)\s*(\d+)\b', 'SB'),
-                    (r'\b(HB|hb|House Bill|house bill)\s*(\d+)\b', 'HB')
-                ]
-                
-                bill_query = None
-                for pattern, btype in bill_patterns:
-                    match = re.search(pattern, query, re.IGNORECASE)
-                    if match:
-                        prefix = match.group(1).upper()
-                        number = match.group(2)
-                        bill_query = f"{prefix}{number}"
-                        break
-                
-                if bill_query:
-                    if st.session_state.debug:
-                        st.sidebar.write(f"Extracted bill number: {bill_query}")
-                    
+                try:
+                    # Get the most recent bill of this type
                     query_sql = f"""
+                        WITH RankedBills AS (
+                            SELECT DISTINCT "source_file",
+                                ROW_NUMBER() OVER (ORDER BY "source_file" DESC) as rn
+                            FROM BILL_CHUNKS
+                            WHERE "source_file" LIKE '{bill_type}%'
+                        )
                         SELECT b."chunk", b."source_file", b."chunk_index"
                         FROM BILL_CHUNKS b
-                        WHERE UPPER(b."source_file") LIKE '%{bill_query.upper()}.PDF%'
-                        {where_clause}
-                        ORDER BY b."chunk_index"
-                        LIMIT {st.session_state.num_retrieved_chunks}
+                        INNER JOIN RankedBills r ON r."source_file" = b."source_file"
+                        WHERE r.rn = 1
+                        ORDER BY b."chunk_index";
                     """
+                except Exception as e:
+                    print("error 125")
+                    print(f"Error getting most recent {bill_type} bill: {str(e)}")
+                    if st.session_state.debug:
+                        st.sidebar.write(f"Error getting most recent {bill_type} bill: {str(e)}")
+                    return []
+            
+            else:
+                # Check for sponsor query patterns
+                sponsor_patterns = [
+                    r'(?:bills? (?:by|from|sponsored by)|what (?:bills|else) (?:has|have|did))?\s*(?:senator[s]?\s+([a-zA-Z.\s-]+))',
+                    r'(?:what|any|other)\s+bills?\s+(?:by|from|sponsored by)\s+([a-zA-Z.\s-]+?)(?:\s+(?:sponsor|file|author)|[?.,]|$)'
+                ]
+                
+                sponsor_name = None
+                for pattern in sponsor_patterns:
+                    match = re.search(pattern, query, re.IGNORECASE)
+                    if match:
+                        sponsor_name = match.group(1).strip()
+                        break
+                        
+                if sponsor_name:
+                    if st.session_state.debug:
+                        st.sidebar.write(f"Looking for bills by sponsor: {sponsor_name}")
+                    
+                    # Get bills where first chunk contains the sponsor
+                    query_sql = f"""
+                        WITH RankedChunks AS (
+                            SELECT "chunk", "source_file", "chunk_index",
+                                   ROW_NUMBER() OVER (PARTITION BY "source_file" ORDER BY "chunk_index") as rn
+                            FROM BILL_CHUNKS
+                        )
+                        SELECT DISTINCT b."chunk", b."source_file", b."chunk_index"
+                        FROM BILL_CHUNKS b
+                        INNER JOIN RankedChunks r ON r."source_file" = b."source_file"
+                        WHERE r.rn = 1 
+                        AND r."chunk" LIKE '%By:%'
+                        AND r."chunk" LIKE '%{sponsor_name}%'
+                        ORDER BY b."source_file", b."chunk_index";
+                    """
+                    
                 else:
                     # Use text search as last resort
                     query_sql = f"""
@@ -451,7 +463,10 @@ def query_cortex_search_service(query, columns=None, filter=None):
             return "", []
             
         # Add appropriate summary based on query type
-        if bill_type:
+        if bill_query:
+            summary = f"Here's the bill you asked for:\n\n"
+            context_parts.insert(0, summary)
+        elif bill_type:
             summary = f"Here's the most recent {bill_type} bill:\n\n"
             context_parts.insert(0, summary)
         elif sponsor_name:
@@ -854,6 +869,14 @@ def load_bills_to_snowflake():
         csv_files = [f for f in os.listdir('csv_files') if f.endswith('.csv')]
         print(f"Found {len(csv_files)} CSV files: {csv_files}")
         
+        # First, clear existing data
+        print("Clearing existing data from BILL_CHUNKS table...")
+        try:
+            session.sql("DELETE FROM BILL_CHUNKS").collect()
+            print("Successfully cleared existing data")
+        except Exception as e:
+            print(f"Error clearing data: {str(e)}")
+        
         # Process each CSV file
         for csv_file in csv_files:
             try:
@@ -868,6 +891,9 @@ def load_bills_to_snowflake():
                     df['timestamp'] = pd.to_datetime(df['timestamp'])
                 if 'date_filed' in df.columns:
                     df['date_filed'] = pd.to_datetime(df['date_filed'])
+                
+                # Convert source_file to uppercase in pandas first
+                df['source_file'] = df['source_file'].str.upper()
                 
                 # Convert to Snowpark DataFrame
                 print(f"Writing {csv_file} to Snowflake...")
@@ -888,16 +914,22 @@ def load_bills_to_snowflake():
         
 def main():
     """Main function to run the Streamlit app"""
-    # Initialize session state
-    init_session_state()
-    
     # Initialize Snowflake session
     global session
     session = get_snowflake_session()
     
     if not session:
-        st.error("❌ Failed to connect to the database. Please check your credentials and try again.")
+        print("❌ Failed to connect to the database. Please check your credentials and try again.")
         return
+    
+    # Check for --load_bills argument
+    if len(sys.argv) > 1 and sys.argv[1] == "--load_bills":
+        print("Loading bills to Snowflake...")
+        load_bills_to_snowflake()
+        return
+        
+    # Initialize session state
+    init_session_state()
     
     # Load service metadata
     st.session_state.service_metadata = get_service_metadata(session)
