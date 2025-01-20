@@ -840,7 +840,7 @@ def init_sidebar():
         st.divider()
         
         # Debug mode toggle
-        st.session_state.debug = st.checkbox("Debug Mode", value=False)
+        st.session_state.debug = st.checkbox("Debug Mode", value=True) ## Replace with False later
         
         # Number of chunks slider
         st.session_state.num_retrieved_chunks = st.slider(
