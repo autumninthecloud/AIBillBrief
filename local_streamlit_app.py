@@ -658,11 +658,13 @@ def complete(model, prompt):
         # Escape single quotes in the prompt
         escaped_prompt = prompt.replace("'", "''")
         
-        # Create SQL query to call the language model
+        # Create SQL query to call Mistral
         sql = f"""
-        SELECT llm.generate_text(
-            '{escaped_prompt}',
-            {{'temperature': 0.7, 'max_tokens': 2000}}
+        SELECT MISTRAL.COMPLETE(
+            input_text => '{escaped_prompt}',
+            model => '{model}',
+            max_tokens => 2000,
+            temperature => 0.7
         )
         """
         
