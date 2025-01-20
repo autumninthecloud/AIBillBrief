@@ -654,6 +654,8 @@ def create_prompt(user_question):
             """
     return prompt, results
 
+import re
+
 def complete(prompt, session=None):
     """Generate completion using Cortex Search Service."""
     try:
@@ -662,11 +664,20 @@ def complete(prompt, session=None):
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
 
-        st.write("Debug - Searching for:", prompt)
+        # Extract the user's question from the prompt
+        match = re.search(r'<question>\s*(.*?)\s*</question>', prompt, re.DOTALL)
+        if match:
+            search_query = match.group(1).strip()
+            # Clean the query
+            search_query = search_query.replace("'", "''")
+        else:
+            search_query = prompt.replace("'", "''")
+
+        st.write("Debug - Searching for:", search_query)
 
         # Use the existing query_cortex_search_service function
         context, results = query_cortex_search_service(
-            prompt,
+            search_query,
             columns=["chunk", "source_file"],
             filter=None
         )
@@ -1014,7 +1025,6 @@ def main():
                 
                 # Show thinking animation
                 with st.spinner("Thinking..."):
-                    question = question.replace("'", "")
                     prompt, results = create_prompt(question)
                     generated_response = complete(
                         prompt, session
