@@ -183,7 +183,7 @@ def get_bill_stats(_session):
             }
         return {'total_bills': 0, 'latest_file_date': None}
     except Exception as e:
-        st.error(f"Error getting bill stats: {str(e)}")
+        st.write(f"Error getting bill stats: {str(e)}")
         return {'total_bills': 0, 'latest_file_date': None}
 
 def format_date(date):
