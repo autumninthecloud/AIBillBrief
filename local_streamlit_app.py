@@ -673,16 +673,12 @@ def complete(prompt, session=None):
         else:
             search_query = prompt.replace("'", "''")
 
-        st.write("Debug - Searching for:", search_query)
-
         # Use the existing query_cortex_search_service function
         context, results = query_cortex_search_service(
             search_query,
             columns=["chunk", "source_file"],
             filter=None
         )
-
-        st.write("Debug - Got results:", len(results) if results else 0)
 
         if not results:
             return "I don't have any relevant information about that in my current database."
@@ -692,7 +688,6 @@ def complete(prompt, session=None):
         for result in results:
             # Convert Snowpark Row to dict for easier handling
             result_dict = result.as_dict()
-            st.write("Debug - Processing result:", result_dict)
             
             # Try both upper and lower case column names
             chunk = result_dict.get('CHUNK', result_dict.get('chunk', ''))
@@ -703,14 +698,11 @@ def complete(prompt, session=None):
                 bill_ref = format_bill_reference(bill_name)
                 response_parts.append(f"According to {bill_ref}:\n{chunk}")
 
-        response = "\n\n".join(response_parts)
-        st.write("Debug - Final response length:", len(response))
-        return response
+        return "\n\n".join(response_parts)
 
     except Exception as e:
         error_msg = f"Error in language model completion: {str(e)}"
         st.error(error_msg)
-        st.write("Debug - Full error:", traceback.format_exc())
         return error_msg
 
 def init_config_options():
