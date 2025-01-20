@@ -972,18 +972,11 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
-                    st.session_state.messages.append({"role": "assistant", "content": results})
-                    # generated_response = complete(
-                    #     st.session_state.model_name, prompt
-                    # )
-                
-                # Display the response
-                message_placeholder.markdown(results)
-                
-                # Add to chat history
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": results}
-                )
+                    response = get_response(prompt, results)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    message_placeholder.markdown(response)
+                    
+
 
 if __name__ == "__main__":
     main()
