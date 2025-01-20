@@ -559,12 +559,19 @@ class Complete:
 
     def __str__(self):
         try:
+            # First, let's check what ML functions are available
+            check_sql = """
+            SHOW USER FUNCTIONS LIKE '%COMPLETE%';
+            """
+            result = self.session.sql(check_sql).collect()
+            st.write("Available functions:", result)
+            
             # Escape single quotes in the prompt
             escaped_prompt = self.prompt.replace("'", "''")
             
             # Create SQL query to call the language model
             sql = f"""
-            SELECT SNOWFLAKE.ML.COMPLETE(
+            SELECT ML.COMPLETE(
                 '{self.model}',
                 '{escaped_prompt}',
                 {{'max_tokens': 2000, 'temperature': 0.7}}
