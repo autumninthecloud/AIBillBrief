@@ -1004,7 +1004,7 @@ def main():
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
                     generated_response = complete(
-                        st.session_state.model_name, prompt, session
+                        prompt, session
                     )
                 
                 # Display the response
