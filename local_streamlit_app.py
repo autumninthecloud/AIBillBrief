@@ -558,13 +558,13 @@ def create_prompt(user_question):
                 columns=["chunk", "source_file"],
                 filter={}
             )
-    else:
-        prompt_context, results = query_cortex_search_service(
-            user_question,
-            columns=["chunk", "source_file"],
-            filter={}
-        )
-        chat_history = ""
+        else:
+            prompt_context, results = query_cortex_search_service(
+                user_question,
+                columns=["chunk", "source_file"],
+                filter={}
+            )
+            chat_history = ""
 
     # Process context to include bill links
     processed_context = prompt_context
