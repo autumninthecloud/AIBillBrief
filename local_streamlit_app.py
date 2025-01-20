@@ -174,9 +174,9 @@ def get_bill_stats(_session):
                 MAX("date_filed") as latest_file_date
             FROM BILL_CHUNKS
         """).collect()
-        st.write(stats)
         if stats and len(stats) > 0:
             st.write("made it here")
+            st.write(stats)
             return {
                 'total_bills': get_row_value(stats[0], 'TOTAL_BILLS'),
                 'latest_file_date': get_row_value(stats[0], 'LATEST_FILE_DATE')
