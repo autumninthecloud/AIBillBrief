@@ -662,27 +662,30 @@ def complete(model, prompt, session=None):
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
         
-        # Escape single quotes in the prompt
-        escaped_prompt = prompt.replace("'", "''")
-        
-        # Create SQL query to call the language model
-        sql = f"""
-        SELECT SNOW_PDF.PUBLIC.GENERATE_TEXT(
-            '{escaped_prompt}',
-            {{'temperature': 0.7, 'max_tokens': 2000}}
-        )
+        # Check what functions are available
+        sql = """
+        SHOW USER FUNCTIONS IN SCHEMA SNOW_PDF.PUBLIC;
         """
+        functions = session.sql(sql).collect()
+        st.write("Available functions:", functions)
         
-        # Execute the query and get result
-        result = session.sql(sql).collect()
+        # Check what procedures are available
+        sql = """
+        SHOW PROCEDURES IN SCHEMA SNOW_PDF.PUBLIC;
+        """
+        procedures = session.sql(sql).collect()
+        st.write("Available procedures:", procedures)
         
-        if not result or len(result) == 0:
-            raise ValueError("No response from language model")
-            
-        # Extract and sanitize the response
-        response = result[0][0]
-        return response.replace("$", "\$")
-    
+        # Check what external functions are available
+        sql = """
+        SHOW EXTERNAL FUNCTIONS IN SCHEMA SNOW_PDF.PUBLIC;
+        """
+        external = session.sql(sql).collect()
+        st.write("Available external functions:", external)
+        
+        # For now return a placeholder
+        return "Checking available functions... Please check the debug output above."
+        
     except Exception as e:
         error_msg = f"Error in language model completion: {str(e)}"
         st.error(error_msg)
