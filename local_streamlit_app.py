@@ -972,8 +972,10 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
-                    st.session_state.messages.append({"role": "assistant", "content": results[0]['chunk']})
-                    message_placeholder.markdown(results[0]['chunk'])
+                    print("Prompt:", prompt)
+                    print("Results:", results)
+                    # st.session_state.messages.append({"role": "assistant", "content": results})
+                    message_placeholder.markdown(results)
 
 
 
