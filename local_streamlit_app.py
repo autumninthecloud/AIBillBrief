@@ -546,6 +546,45 @@ def format_bill_header(bill_name, bill_info):
     
     return "\n\n".join(header_parts)
 
+class Complete:
+    """Class to handle language model completions"""
+    def __init__(self, model, prompt, session=None):
+        self.model = model
+        self.prompt = prompt
+        self.session = session
+        if session is None:
+            self.session = get_snowflake_session()
+            if self.session is None:
+                raise ValueError("Could not establish Snowflake session")
+
+    def __str__(self):
+        try:
+            # Escape single quotes in the prompt
+            escaped_prompt = self.prompt.replace("'", "''")
+            
+            # Create SQL query to call the language model
+            sql = f"""
+            SELECT SNOWFLAKE.ML.COMPLETE(
+                '{self.model}',
+                '{escaped_prompt}',
+                {{'max_tokens': 2000, 'temperature': 0.7}}
+            )
+            """
+            
+            # Execute the query and get result
+            result = self.session.sql(sql).collect()
+            
+            if not result or len(result) == 0:
+                raise ValueError("No response from language model")
+                
+            # Extract the response
+            return result[0][0]
+        
+        except Exception as e:
+            error_msg = f"Error in language model completion: {str(e)}"
+            st.error(error_msg)
+            return error_msg
+
 def create_prompt(user_question):
     """Create prompt for the language model"""
     # Get current bill statistics
@@ -654,34 +693,26 @@ def get_chat_history():
 
 def complete(model, prompt):
     """Generate completion using Snowflake"""
-    try:
-        # Escape single quotes in the prompt
-        escaped_prompt = prompt.replace("'", "''")
-        
-        # Create SQL query to call Mistral
-        sql = f"""
-        SELECT MISTRAL.COMPLETE(
-            input_text => '{escaped_prompt}',
-            model => '{model}',
-            max_tokens => 2000,
-            temperature => 0.7
-        )
-        """
-        
-        # Execute the query and get result
-        result = session.sql(sql).collect()
-        
-        if not result or len(result) == 0:
-            raise ValueError("No response from language model")
-            
-        # Extract and sanitize the response
-        response = result[0][0]
-        return response.replace("$", "\$")
-    
-    except Exception as e:
-        error_msg = f"Error in language model completion: {str(e)}"
-        st.error(error_msg)
-        return error_msg
+    return Complete(model, prompt, session=session).replace("$", "\$")
+
+def init_session_state():
+    """Initialize all session state variables"""
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "debug" not in st.session_state:
+        st.session_state.debug = False
+    if "use_chat_history" not in st.session_state:
+        st.session_state.use_chat_history = True
+    if "model_name" not in st.session_state:
+        st.session_state.model_name = "mistral-large2"
+    if "num_retrieved_chunks" not in st.session_state:
+        st.session_state.num_retrieved_chunks = 5
+    if "num_chat_messages" not in st.session_state:
+        st.session_state.num_chat_messages = 10
+    if "service_metadata" not in st.session_state:
+        st.session_state.service_metadata = []
+    if "selected_cortex_search_service" not in st.session_state:
+        st.session_state.selected_cortex_search_service = None
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
