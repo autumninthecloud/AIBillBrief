@@ -662,6 +662,8 @@ def complete(prompt, session=None):
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
 
+        st.write("Debug - Searching for:", prompt)
+
         # Use the existing query_cortex_search_service function
         context, results = query_cortex_search_service(
             prompt,
@@ -669,12 +671,17 @@ def complete(prompt, session=None):
             filter=None
         )
 
+        st.write("Debug - Got results:", len(results) if results else 0)
+        if results:
+            st.write("Debug - First result keys:", results[0].keys() if results else "No keys")
+
         if not results:
             return "I don't have any relevant information about that in my current database."
 
         # Process the results into a response
         response_parts = []
         for result in results:
+            st.write("Debug - Processing result:", result)
             chunk = result.get('CHUNK', result.get('chunk', ''))
             source = result.get('SOURCE_FILE', result.get('source_file', 'Unknown'))
             if chunk and source:
@@ -683,11 +690,13 @@ def complete(prompt, session=None):
                 response_parts.append(f"According to {bill_ref}:\n{chunk}")
 
         response = "\n\n".join(response_parts)
+        st.write("Debug - Final response length:", len(response))
         return response
 
     except Exception as e:
         error_msg = f"Error in language model completion: {str(e)}"
         st.error(error_msg)
+        st.write("Debug - Full error:", traceback.format_exc())
         return error_msg
 
 def init_config_options():
