@@ -4,6 +4,7 @@ import pandas as pd
 import traceback
 from dotenv import load_dotenv
 from snowflake.snowpark import Session
+from snowflake.cortex import Complete
 import json
 import re
 import sys
@@ -972,10 +973,11 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
-                    generated_response = complete(
-                        st.session_state.model_name, prompt
-                    )
+                    # generated_response = complete(
+                    #     st.session_state.model_name, prompt
+                    # )
                 
+                generated_response = results[0]
                 # Display the response
                 message_placeholder.markdown(generated_response)
                 
