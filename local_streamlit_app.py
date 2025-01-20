@@ -667,10 +667,9 @@ def complete(model, prompt, session=None):
         
         # Create SQL query to call the language model
         sql = f"""
-        CALL SYSTEM$GENERATE_TEXT(
-            '{model}',  -- model name
-            '{escaped_prompt}',  -- prompt
-            {{'max_tokens': 2000, 'temperature': 0.7}}  -- parameters
+        SELECT SNOW_PDF.PUBLIC.GENERATE_TEXT(
+            '{escaped_prompt}',
+            {{'temperature': 0.7, 'max_tokens': 2000}}
         )
         """
         
