@@ -662,11 +662,16 @@ def complete(prompt, session=None):
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
 
+        # Clean and escape the prompt for SQL
+        escaped_prompt = prompt.replace("'", "''").replace('"', '""')
+
         # Construct the query to the Cortex Search Service
         query = f"""
-        SELECT chunk, relative_path, file_url, language
+        SELECT *
         FROM bill_cortex_search
-        WHERE CONTAINS(chunk, '{prompt}')
+        WHERE SEARCH_PHRASE(chunk, '{escaped_prompt}')
+        ORDER BY RELEVANCE DESC
+        LIMIT 5
         """
 
         # Execute the query
@@ -677,8 +682,12 @@ def complete(prompt, session=None):
             return "No relevant information found."
 
         # Example: Concatenate chunks for a simple summary
-        summary = " ".join([row['chunk'] for row in results])
-
+        chunks = []
+        for row in results:
+            chunk = row['CHUNK'] if 'CHUNK' in row else row['chunk']
+            chunks.append(chunk)
+        
+        summary = "\n\n".join(chunks)
         return summary
 
     except Exception as e:
