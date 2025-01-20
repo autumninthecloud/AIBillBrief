@@ -175,7 +175,6 @@ def get_bill_stats(_session):
             FROM BILL_CHUNKS
         """).collect()
         if stats and len(stats) > 0:
-            st.write("made it here")
             st.write(stats)
             return {
                 'total_bills': get_row_value(stats[0], 'TOTAL_BILLS'),
@@ -552,6 +551,8 @@ def create_prompt(user_question):
     # Get current bill statistics
     bill_stats = get_bill_stats(session)
     
+    prompt_context = ""
+    results = []
     if st.session_state.use_chat_history:
         chat_history = get_chat_history()
         if chat_history != []:
