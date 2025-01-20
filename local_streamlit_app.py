@@ -4,6 +4,7 @@ import pandas as pd
 import traceback
 from dotenv import load_dotenv
 from snowflake.snowpark import Session
+from local_pdf_processor import LocalPDFProcessor
 import json
 import re
 import sys
@@ -164,28 +165,25 @@ def get_recent_bills(_session):
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_bill_stats(_session):
     """Get cached bill statistics"""
-    st.write(_session)
     if not _session:
         return {'total_bills': 0, 'latest_file_date': None}
         
     try:
         stats = _session.sql("""
             SELECT 
-                COUNT(DISTINCT "source_file") as TOTAL_BILLS,
+                COUNT(DISTINCT "source_file") as total_bills,
                 MAX("date_filed") as latest_file_date
             FROM BILL_CHUNKS
         """).collect()
-        st.write("stats", stats)
         if stats and len(stats) > 0:
-            st.write(stats)
             return {
                 'total_bills': get_row_value(stats[0], 'TOTAL_BILLS'),
                 'latest_file_date': get_row_value(stats[0], 'LATEST_FILE_DATE')
             }
-        st.write("No stats found")
         return {'total_bills': 0, 'latest_file_date': None}
     except Exception as e:
-        st.write(f"Error getting bill stats: {str(e)}")
+        if st.session_state.debug:
+            st.error(f"Error getting bill stats: {str(e)}")
         return {'total_bills': 0, 'latest_file_date': None}
 
 def format_date(date):
@@ -553,8 +551,6 @@ def create_prompt(user_question):
     # Get current bill statistics
     bill_stats = get_bill_stats(session)
     
-    prompt_context = ""
-    results = []
     if st.session_state.use_chat_history:
         chat_history = get_chat_history()
         if chat_history != []:
@@ -658,7 +654,7 @@ def get_chat_history():
 
 def complete(model, prompt):
     """Generate completion using Snowflake"""
-    return Complete(model, prompt, session=session)
+    return Complete(model, prompt, session=session).replace("$", "\$")
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
@@ -842,7 +838,7 @@ def init_sidebar():
         st.divider()
         
         # Debug mode toggle
-        st.session_state.debug = st.checkbox("Debug Mode", value=True) ## Replace with False later
+        st.session_state.debug = st.checkbox("Debug Mode", value=False)
         
         # Number of chunks slider
         st.session_state.num_retrieved_chunks = st.slider(
@@ -967,7 +963,7 @@ def main():
         # Display user message in chat message container
         with chat_container:
             with st.chat_message("user"):
-                st.markdown(question)
+                st.markdown(question.replace("$", "\$"))
 
             # Display assistant response in chat message container
             with st.chat_message("assistant"):
@@ -977,12 +973,18 @@ def main():
                 with st.spinner("Thinking..."):
                     question = question.replace("'", "")
                     prompt, results = create_prompt(question)
-                    print("Prompt:", prompt)
-                    print("Results:", results)
-                    # st.session_state.messages.append({"role": "assistant", "content": results})
-                    message_placeholder.markdown(results)
-
-
+                    # generated_response = complete(
+                    #     st.session_state.model_name, prompt
+                    # )
+                
+                generated_response = results[0]
+                # Display the response
+                message_placeholder.markdown(generated_response)
+                
+                # Add to chat history
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": generated_response}
+                )
 
 if __name__ == "__main__":
     main()

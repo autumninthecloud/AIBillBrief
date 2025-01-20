@@ -133,3 +133,4 @@ if __name__ == '__main__':
     output_folder = 'csv_files'
     processor = LocalPDFProcessor(pdf_folder, output_folder)
     processor.process_pdfs()
+
