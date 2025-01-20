@@ -559,29 +559,16 @@ class Complete:
 
     def __str__(self):
         try:
-            # Check current database and schema
-            check_sql = """
-            SELECT CURRENT_DATABASE(), CURRENT_SCHEMA();
-            """
-            result = self.session.sql(check_sql).collect()
-            st.write("Current database and schema:", result)
-            
-            # Show available databases
-            check_sql = """
-            SHOW DATABASES;
-            """
-            result = self.session.sql(check_sql).collect()
-            st.write("Available databases:", result)
-            
             # Escape single quotes in the prompt
             escaped_prompt = self.prompt.replace("'", "''")
             
             # Create SQL query to call the language model
             sql = f"""
-            SELECT COMPLETE(
-                '{self.model}',
-                '{escaped_prompt}',
-                {{'max_tokens': 2000, 'temperature': 0.7}}
+            CALL SPROC_GENERATE_TEXT(
+                input_text => '{escaped_prompt}',
+                model => '{self.model}',
+                max_tokens => 2000,
+                temperature => 0.7
             )
             """
             
