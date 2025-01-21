@@ -550,7 +550,7 @@ def format_bill_header(bill_name, bill_info):
 
 def get_bill_url(bill_name):
     """Generate URL for a bill"""
-    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}.pdf"
+    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}"
 
 def format_bill_reference(bill_name):
     """Format a bill reference with its URL"""
