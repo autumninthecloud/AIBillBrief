@@ -559,8 +559,8 @@ def format_bill_reference(bill_name):
 
 def get_bill_status_url(bill_name):
     """Generate URL for a bill's status page"""
-    # Remove .pdf extension if present and convert to lowercase
-    bill_name = bill_name.replace('.pdf', '').lower()
+    # Convert to lowercase - bill_name should already be clean of .pdf
+    bill_name = bill_name.lower()
     return f"https://arkleg.state.ar.us/Bills/Detail?id={bill_name}&ddBienniumSession=2025%2F2025R&Search="
 
 def get_chat_history():
@@ -716,9 +716,9 @@ def extract_key_points(full_text):
     # Add section summaries
     for section in section_info:
         if section['title']:
-            point = f"Section {section['number']} ({section['title'].title()}): {section['content']}"
+            point = f"**Section {section['number']}** ({section['title'].title()}): {section['content']}"
         else:
-            point = f"Section {section['number']}: {section['content']}"
+            point = f"**Section {section['number']}**: {section['content']}"
         key_points.append(point)
     
     # Look for appropriation amounts
@@ -799,8 +799,9 @@ def complete(prompt, session=None):
         # Extract basic bill information
         first_result = results[0].as_dict()
         source = first_result.get('SOURCE_FILE', first_result.get('source_file', 'Unknown'))
-        bill_name = source.replace('.pdf', '')
+        bill_name = source.replace('.pdf', '')  # Clean bill name once
         bill_ref = format_bill_reference(bill_name)
+        # Use clean bill name directly, no need to remove .pdf again
         bill_status_url = get_bill_status_url(bill_name)
 
         # Extract bill details
