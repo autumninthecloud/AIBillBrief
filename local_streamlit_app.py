@@ -596,13 +596,13 @@ def count_pages(full_text):
 
 def extract_sections(full_text):
     """Extract and analyze bill sections."""
-    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+)', full_text)
+    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+?)(?=(?:SECTION|$))', full_text, re.DOTALL)
     section_info = []
     
     for section in sections:
         section_num = section.group(1)
         title = section.group(2) if section.group(2) else None
-        content = clean_text(section.group(3))
+        content = clean_section_content(section.group(3))
         
         if content and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
             # Convert legal language to more natural language
@@ -664,12 +664,15 @@ def extract_key_points(full_text):
         for match in matches:
             action = clean_text(match.group(1))
             if (len(action) > 20 and 
-                not any(x in action.lower() for x in ['this act', 'read as follows', 'section']) and
+                not any(action.lower().startswith(x) for x in ['this act', 'read as follows', 'section']) and
                 not re.search(r'^\d', action)):
                 action = action.lower()
                 action = re.sub(r'shall|must', replacement, action)
                 action = re.sub(r'pursuant to', 'according to', action)
                 action = re.sub(r'hereby', '', action)
+                action = re.sub(r'therein|thereof|thereto', 'in it', action)
+                action = re.sub(r'wherein', 'where', action)
+                action = re.sub(r'deemed', 'considered', action)
                 action = action.capitalize()
                 key_points.append(action)
 
@@ -795,6 +798,15 @@ def clean_section_content(content):
     # Clean up Arkansas Code citations
     content = re.sub(r'Arkansas Code [§\s]+([\d\-]+(?:\([a-zA-Z0-9]+\))*)', r'Arkansas Code Section \1', content)
     
+    # Bold dates (various formats)
+    content = re.sub(r'(\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b)', r'**\1**', content, flags=re.IGNORECASE)
+    content = re.sub(r'(\b\d{1,2}/\d{1,2}/\d{4}\b)', r'**\1**', content)
+    content = re.sub(r'(\b\d{4}-\d{2}-\d{2}\b)', r'**\1**', content)
+    
+    # Bold financial amounts (with optional decimals and various currency formats)
+    content = re.sub(r'(\$\s*\d+(?:,\d{3})*(?:\.\d{2})?(?:\s*(?:million|billion|trillion))?)', r'**\1**', content, flags=re.IGNORECASE)
+    content = re.sub(r'(\b\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars?|USD)\b)', r'**\1**', content, flags=re.IGNORECASE)
+    
     # Remove repeated whitespace
     content = ' '.join(content.split())
     
@@ -803,35 +815,6 @@ def clean_section_content(content):
         content = content[0].upper() + content[1:]
     
     return content
-
-def extract_sections(full_text):
-    """Extract and analyze bill sections."""
-    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+?)(?=(?:SECTION|$))', full_text, re.DOTALL)
-    section_info = []
-    
-    for section in sections:
-        section_num = section.group(1)
-        title = section.group(2) if section.group(2) else None
-        content = clean_section_content(section.group(3))
-        
-        if content and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
-            # Convert legal language to more natural language
-            content = content.lower()
-            content = re.sub(r'shall', 'will', content)
-            content = re.sub(r'pursuant to', 'according to', content)
-            content = re.sub(r'hereby', '', content)
-            content = re.sub(r'therein|thereof|thereto', 'in it', content)
-            content = re.sub(r'wherein', 'where', content)
-            content = re.sub(r'deemed', 'considered', content)
-            content = content.capitalize()
-            
-            section_info.append({
-                'number': section_num,
-                'title': title,
-                'content': content
-            })
-    
-    return section_info
 
 def get_bill_url(bill_name):
     """Generate URL for a bill"""
