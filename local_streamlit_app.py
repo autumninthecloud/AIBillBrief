@@ -694,8 +694,7 @@ def complete(prompt, session=None):
         sponsor_name = sponsor_match.group(2) if sponsor_match else "Unknown"
         
         # Extract and clean the title
-        title_match = re.search(r'AN ACT (?:TO|FOR)\s+(.*?)(?=(?:\.|;|\d|SECTION|BE IT ENACTED))', full_text, re.DOTALL | re.IGNORECASE)
-        title = clean_title(title_match.group(1).strip()) if title_match else ""
+        title = extract_bill_title(full_text)
         
         date_match = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
         filing_date = date_match.group(1) if date_match else "Unknown date"
@@ -729,18 +728,24 @@ This bill aims to {title.lower()}
         st.error(error_msg)
         return error_msg
 
-def clean_title(title):
-    """Clean and format the bill title."""
-    # Remove line numbers and extra whitespace
-    title = re.sub(r'\s*\d+\s*(?=\S)', ' ', title)
-    # Clean up extra whitespace
-    title = ' '.join(title.split())
-    # Ensure the title ends with proper punctuation
-    if title and not title.endswith(('.', ';')):
-        next_sentence = title.split('.')[0]
-        if next_sentence:
-            title = next_sentence.strip() + '.'
-    return title
+def extract_bill_title(full_text):
+    """Extract and clean the bill title."""
+    # First try to get the full title including subtitle
+    title_match = re.search(r'AN ACT.*?(?:Subtitle.*?)?(?=(?:BE IT ENACTED|SECTION \d+))', full_text, re.DOTALL | re.IGNORECASE)
+    if title_match:
+        title = title_match.group(0)
+        # Remove "AN ACT" and "Subtitle" prefixes
+        title = re.sub(r'^AN ACT (?:TO|FOR)\s+', '', title, flags=re.IGNORECASE)
+        title = re.sub(r'Subtitle\s*', '', title, flags=re.IGNORECASE)
+        # Clean up the text
+        title = clean_text(title)
+        # Ensure it ends with proper punctuation
+        if title and not title.endswith(('.', ';')):
+            next_sentence = title.split('.')[0]
+            if next_sentence:
+                title = next_sentence.strip() + '.'
+        return title
+    return ""
 
 def clean_section_content(content):
     """Clean section content for better readability."""
@@ -756,6 +761,9 @@ def clean_section_content(content):
     # Fix spacing around punctuation
     content = re.sub(r'\s+([.,;:])', r'\1', content)
     
+    # Clean up Arkansas Code citations
+    content = re.sub(r'Arkansas Code [§\s]+([\d\-]+(?:\([a-zA-Z0-9]+\))*)', r'Arkansas Code Section \1', content)
+    
     # Remove repeated whitespace
     content = ' '.join(content.split())
     
@@ -767,7 +775,7 @@ def clean_section_content(content):
 
 def extract_sections(full_text):
     """Extract and analyze bill sections."""
-    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+)', full_text)
+    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+?)(?=(?:SECTION|$))', full_text, re.DOTALL)
     section_info = []
     
     for section in sections:
