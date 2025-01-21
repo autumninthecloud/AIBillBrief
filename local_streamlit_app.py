@@ -1094,7 +1094,6 @@ def init_sidebar():
         ### How to Use 🤔
         You can ask questions like:
         - "Tell me about Senate Bill 8"
-        - "What bills has Senator Payton filed?"
         - "Show me a recent House Bill"
         - "What's the latest SB?"
         
