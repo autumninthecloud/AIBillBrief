@@ -16,6 +16,37 @@ st.set_page_config(
     layout="wide"
 )
 
+# Custom CSS for better message formatting
+st.markdown("""
+    <style>
+    /* Add padding to message containers */
+    .stChatMessage {
+        padding: 1rem !important;
+    }
+    
+    /* Improve message content spacing */
+    .stMarkdown {
+        padding: 0.5rem 0;
+    }
+    
+    /* Add margin to chat bubbles */
+    .message {
+        margin: 1rem 0 !important;
+        padding: 1rem !important;
+    }
+    
+    /* Ensure links are clearly visible */
+    a {
+        color: #4a90e2 !important;
+        text-decoration: none !important;
+    }
+    
+    a:hover {
+        text-decoration: underline !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # Load environment variables from .env file
 load_dotenv()
 
