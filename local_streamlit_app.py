@@ -596,30 +596,25 @@ def count_pages(full_text):
 
 def extract_sections(full_text):
     """Extract and analyze bill sections."""
-    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+?)(?=(?:SECTION|$))', full_text, re.DOTALL)
+    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([^\.]+?)\.)?(?:\s+([^\.]+?)(?=(?:SECTION \d+|\Z)))', full_text, re.DOTALL | re.IGNORECASE)
     section_info = []
     
     for section in sections:
         section_num = section.group(1)
         title = section.group(2) if section.group(2) else None
-        content = clean_section_content(section.group(3))
+        content = section.group(3) if section.group(3) else ""
         
-        if content and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
-            # Convert legal language to more natural language
-            content = content.lower()
-            content = re.sub(r'shall', 'will', content)
-            content = re.sub(r'pursuant to', 'according to', content)
-            content = re.sub(r'hereby', '', content)
-            content = re.sub(r'therein|thereof|thereto', 'in it', content)
-            content = re.sub(r'wherein', 'where', content)
-            content = re.sub(r'deemed', 'considered', content)
-            content = content.capitalize()
+        # Skip common boilerplate sections
+        if content and not any(x in content.lower() for x in ['be it enacted', 'read as follows']):
+            # Clean and format the content
+            content = clean_section_content(content)
             
-            section_info.append({
-                'number': section_num,
-                'title': title,
-                'content': content
-            })
+            if content:  # Only add if we have meaningful content
+                section_info.append({
+                    'number': section_num,
+                    'title': title,
+                    'content': content
+                })
     
     return section_info
 
@@ -627,159 +622,40 @@ def extract_key_points(full_text):
     """Extract meaningful key points from bill text."""
     key_points = []
     section_info = extract_sections(full_text)
+    section_count = len(section_info)
     
-    # Add section summaries
-    for section in section_info:
-        if section['title']:
-            point = f"**Section {section['number']}** ({section['title'].title()}): {section['content']}"
-        else:
-            point = f"**Section {section['number']}**: {section['content']}"
-        key_points.append(point)
-    
-    # Look for appropriation amounts
-    money_matches = re.finditer(r'\$\s*([\d,]+(?:\.\d{2})?)', full_text)
-    for match in money_matches:
-        amount = match.group(1)
-        surrounding_text = full_text[max(0, match.start() - 100):match.end() + 100]
-        purpose = re.search(r'(?:for|to)\s+([^\.]+)', surrounding_text)
-        if purpose:
-            purpose_text = purpose.group(1).strip().lower()
-            purpose_text = re.sub(r'shall', 'will', purpose_text)
-            key_points.append(f"Allocates ${amount} to {purpose_text}")
-
-    # Look for date ranges
-    date_range = re.search(r'in effect (?:only )?from (.*?) through (.*?)\.', full_text)
-    if date_range:
-        key_points.append(f"This bill will be active from {date_range.group(1)} through {date_range.group(2)}")
-
-    # Look for specific actions or requirements
-    action_patterns = [
-        (r'(?:shall|must)\s+([^\.]+)', 'will'),
-        (r'(?:is|are)\s+(?:required|prohibited|authorized)\s+to\s+([^\.]+)', 'must'),
-        (r'(?:may not|shall not)\s+([^\.]+)', 'cannot')
-    ]
-    
-    for pattern, replacement in action_patterns:
-        matches = re.finditer(pattern, full_text)
+    # Add section summaries if available
+    if section_info:
+        for section in section_info:
+            if section['title']:
+                point = f"**Section {section['number']}** ({section['title'].title()}): {section['content']}"
+            else:
+                point = f"**Section {section['number']}**: {section['content']}"
+            key_points.append(point)
+    else:
+        # If no sections found, try to extract key actions
+        matches = re.finditer(r'(?:to|will|shall)\s+([^;\.]+)[;\.]', full_text, re.IGNORECASE)
         for match in matches:
             action = clean_text(match.group(1))
             if (len(action) > 20 and 
                 not any(action.lower().startswith(x) for x in ['this act', 'read as follows', 'section']) and
                 not re.search(r'^\d', action)):
+                
+                # Convert to more natural language
                 action = action.lower()
-                action = re.sub(r'shall|must', replacement, action)
+                action = re.sub(r'shall|must', 'will', action)
                 action = re.sub(r'pursuant to', 'according to', action)
                 action = re.sub(r'hereby', '', action)
                 action = re.sub(r'therein|thereof|thereto', 'in it', action)
                 action = re.sub(r'wherein', 'where', action)
                 action = re.sub(r'deemed', 'considered', action)
                 action = action.capitalize()
+                
+                # Bold any dates or financial amounts
+                action = clean_section_content(action)
                 key_points.append(action)
-
-    # Remove duplicates while preserving order
-    seen = set()
-    key_points = [x for x in key_points if not (x.lower() in seen or seen.add(x.lower()))]
-
-    return key_points, len(section_info)
-
-def complete(prompt, session=None):
-    """Generate completion using Cortex Search Service."""
-    try:
-        if session is None:
-            session = get_snowflake_session()
-            if session is None:
-                raise ValueError("Could not establish Snowflake session")
-
-        match = re.search(r'<question>\s*(.*?)\s*</question>', prompt, re.DOTALL)
-        if match:
-            search_query = match.group(1).strip()
-            search_query = search_query.replace("'", "''")
-        else:
-            search_query = prompt.replace("'", "''")
-
-        context, results = query_cortex_search_service(
-            search_query,
-            columns=["chunk", "source_file", "chunk_index"],
-            filter=None
-        )
-
-        if not results:
-            return "I don't have any relevant information about that in my current database."
-
-        # Combine all chunks to get complete bill text
-        all_chunks = []
-        for result in results:
-            result_dict = result.as_dict()
-            chunk = result_dict.get('CHUNK', result_dict.get('chunk', ''))
-            all_chunks.append(chunk)
-        full_text = ' '.join(all_chunks)
-
-        # Extract basic bill information
-        first_result = results[0].as_dict()
-        source = first_result.get('SOURCE_FILE', first_result.get('source_file', 'Unknown'))
-        bill_name = source.replace('.pdf', '')  # Clean bill name once
-        bill_ref = format_bill_reference(bill_name)
-        # Use clean bill name directly, no need to remove .pdf again
-        bill_status_url = get_bill_status_url(bill_name)
-
-        # Extract bill details
-        sponsor_match = re.search(r'By:\s*(Senator|Representative)\s+(.*?)\s*\d', full_text)
-        sponsor_title = sponsor_match.group(1) if sponsor_match else "Legislator"
-        sponsor_name = sponsor_match.group(2) if sponsor_match else "Unknown"
-        
-        # Extract and clean the title
-        title = extract_bill_title(full_text)
-        
-        date_match = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
-        filing_date = date_match.group(1) if date_match else "Unknown date"
-
-        # Get page count and section information
-        page_count = count_pages(full_text)
-        key_points, section_count = extract_key_points(full_text)
-
-        # Create a concise summary in markdown format
-        summary = f"""## {bill_ref}
-**Filed:** {filing_date}  
-**Sponsor:** {sponsor_title} {sponsor_name}  
-**Length:** {page_count} page{'s' if page_count != 1 else ''}, {section_count} section{'s' if section_count != 1 else ''}  
-**Status:** [View latest bill status and history]({bill_status_url})
-
-### Summary
-This bill aims to {title.lower()}
-
-### Key Points
-"""
-        # Add key points with bullet points
-        if key_points:
-            summary += '\n'.join(f"* {point}" for point in key_points)
-        else:
-            summary += "* No additional key points found"
-
-        return summary.strip()
-
-    except Exception as e:
-        error_msg = f"Error in language model completion: {str(e)}"
-        st.error(error_msg)
-        return error_msg
-
-def extract_bill_title(full_text):
-    """Extract and clean the bill title."""
-    # First try to get the full title including subtitle
-    title_match = re.search(r'AN ACT.*?(?:Subtitle.*?)?(?=(?:BE IT ENACTED|SECTION \d+))', full_text, re.DOTALL | re.IGNORECASE)
-    if title_match:
-        title = title_match.group(0)
-        # Remove "AN ACT" and "Subtitle" prefixes
-        title = re.sub(r'^AN ACT (?:TO|FOR)\s+', '', title, flags=re.IGNORECASE)
-        title = re.sub(r'Subtitle\s*', '', title, flags=re.IGNORECASE)
-        # Clean up the text
-        title = clean_text(title)
-        # Ensure it ends with proper punctuation
-        if title and not title.endswith(('.', ';')):
-            next_sentence = title.split('.')[0]
-            if next_sentence:
-                title = next_sentence.strip() + '.'
-        return title
-    return ""
+    
+    return key_points, section_count
 
 def clean_section_content(content):
     """Clean section content for better readability."""
@@ -789,10 +665,6 @@ def clean_section_content(content):
     
     # Clean up parentheses formatting
     content = re.sub(r'\(\s*\)', '()', content)
-    content = re.sub(r'\s+\)', ')', content)
-    content = re.sub(r'\(\s+', '(', content)
-    
-    # Fix spacing around punctuation
     content = re.sub(r'\s+([.,;:])', r'\1', content)
     
     # Clean up Arkansas Code citations
