@@ -557,6 +557,12 @@ def format_bill_reference(bill_name):
     url = get_bill_url(bill_name)
     return f"[{bill_name}]({url})"
 
+def get_bill_status_url(bill_name):
+    """Generate URL for a bill's status page"""
+    # Remove .pdf extension if present and convert to lowercase
+    bill_name = bill_name.replace('.pdf', '').lower()
+    return f"https://arkleg.state.ar.us/Bills/Detail?id={bill_name}&ddBienniumSession=2025%2F2025R&Search="
+
 def get_chat_history():
     """Get chat history"""
     start_index = max(
@@ -666,9 +672,54 @@ def clean_text(text):
     cleaned = ' '.join(cleaned.split())
     return cleaned
 
+def count_pages(full_text):
+    """Count the number of pages in a bill based on page markers."""
+    page_markers = re.findall(r'(?i)(?:sb|hb)\d+\s+(\d+)\s+\d{1,2}/\d{1,2}/\d{4}', full_text)
+    if page_markers:
+        return max(int(page) for page in page_markers)
+    return 1
+
+def extract_sections(full_text):
+    """Extract and analyze bill sections."""
+    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+)', full_text)
+    section_info = []
+    
+    for section in sections:
+        section_num = section.group(1)
+        title = section.group(2) if section.group(2) else None
+        content = clean_text(section.group(3))
+        
+        if content and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
+            # Convert legal language to more natural language
+            content = content.lower()
+            content = re.sub(r'shall', 'will', content)
+            content = re.sub(r'pursuant to', 'according to', content)
+            content = re.sub(r'hereby', '', content)
+            content = re.sub(r'therein|thereof|thereto', 'in it', content)
+            content = re.sub(r'wherein', 'where', content)
+            content = re.sub(r'deemed', 'considered', content)
+            content = content.capitalize()
+            
+            section_info.append({
+                'number': section_num,
+                'title': title,
+                'content': content
+            })
+    
+    return section_info
+
 def extract_key_points(full_text):
     """Extract meaningful key points from bill text."""
     key_points = []
+    section_info = extract_sections(full_text)
+    
+    # Add section summaries
+    for section in section_info:
+        if section['title']:
+            point = f"Section {section['number']} ({section['title'].title()}): {section['content']}"
+        else:
+            point = f"Section {section['number']}: {section['content']}"
+        key_points.append(point)
     
     # Look for appropriation amounts
     money_matches = re.finditer(r'\$\s*([\d,]+(?:\.\d{2})?)', full_text)
@@ -677,42 +728,41 @@ def extract_key_points(full_text):
         surrounding_text = full_text[max(0, match.start() - 100):match.end() + 100]
         purpose = re.search(r'(?:for|to)\s+([^\.]+)', surrounding_text)
         if purpose:
-            key_points.append(f"Appropriates ${amount} {purpose.group(1).strip()}")
+            purpose_text = purpose.group(1).strip().lower()
+            purpose_text = re.sub(r'shall', 'will', purpose_text)
+            key_points.append(f"Allocates ${amount} to {purpose_text}")
 
     # Look for date ranges
     date_range = re.search(r'in effect (?:only )?from (.*?) through (.*?)\.', full_text)
     if date_range:
-        key_points.append(f"Effective period: {date_range.group(1)} through {date_range.group(2)}")
-
-    # Look for main sections and their content
-    sections = re.finditer(r'SECTION\s+\d+\.(?:\s+[A-Z][^\.]+\.)?\s+([^\.]+)', full_text)
-    for section in sections:
-        content = clean_text(section.group(1))
-        if len(content) > 20 and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
-            key_points.append(content.capitalize())
+        key_points.append(f"This bill will be active from {date_range.group(1)} through {date_range.group(2)}")
 
     # Look for specific actions or requirements
     action_patterns = [
-        r'(?:shall|must)\s+([^\.]+)',
-        r'(?:is|are)\s+(?:required|prohibited|authorized)\s+to\s+([^\.]+)',
-        r'(?:may not|shall not)\s+([^\.]+)'
+        (r'(?:shall|must)\s+([^\.]+)', 'will'),
+        (r'(?:is|are)\s+(?:required|prohibited|authorized)\s+to\s+([^\.]+)', 'must'),
+        (r'(?:may not|shall not)\s+([^\.]+)', 'cannot')
     ]
     
-    for pattern in action_patterns:
+    for pattern, replacement in action_patterns:
         matches = re.finditer(pattern, full_text)
         for match in matches:
             action = clean_text(match.group(1))
             if (len(action) > 20 and 
                 not any(x in action.lower() for x in ['this act', 'read as follows', 'section']) and
                 not re.search(r'^\d', action)):
-                key_points.append(action.capitalize())
+                action = action.lower()
+                action = re.sub(r'shall|must', replacement, action)
+                action = re.sub(r'pursuant to', 'according to', action)
+                action = re.sub(r'hereby', '', action)
+                action = action.capitalize()
+                key_points.append(action)
 
     # Remove duplicates while preserving order
     seen = set()
     key_points = [x for x in key_points if not (x.lower() in seen or seen.add(x.lower()))]
 
-    # Limit to most important points
-    return key_points[:5]
+    return key_points, len(section_info)
 
 def complete(prompt, session=None):
     """Generate completion using Cortex Search Service."""
@@ -722,7 +772,6 @@ def complete(prompt, session=None):
             if session is None:
                 raise ValueError("Could not establish Snowflake session")
 
-        # Extract the user's question from the prompt
         match = re.search(r'<question>\s*(.*?)\s*</question>', prompt, re.DOTALL)
         if match:
             search_query = match.group(1).strip()
@@ -730,7 +779,6 @@ def complete(prompt, session=None):
         else:
             search_query = prompt.replace("'", "''")
 
-        # Use the existing query_cortex_search_service function
         context, results = query_cortex_search_service(
             search_query,
             columns=["chunk", "source_file", "chunk_index"],
@@ -753,10 +801,12 @@ def complete(prompt, session=None):
         source = first_result.get('SOURCE_FILE', first_result.get('source_file', 'Unknown'))
         bill_name = source.replace('.pdf', '')
         bill_ref = format_bill_reference(bill_name)
+        bill_status_url = get_bill_status_url(bill_name)
 
         # Extract bill details
         sponsor_match = re.search(r'By:\s*(Senator|Representative)\s+(.*?)\s*\d', full_text)
-        sponsor = sponsor_match.group(2) if sponsor_match else "Unknown"
+        sponsor_title = sponsor_match.group(1) if sponsor_match else "Legislator"
+        sponsor_name = sponsor_match.group(2) if sponsor_match else "Unknown"
         
         title_match = re.search(r'AN ACT (?:TO|FOR)\s+(.*?)(?:\.|;|\d)', full_text, re.DOTALL)
         title = title_match.group(1).strip() if title_match else ""
@@ -764,20 +814,23 @@ def complete(prompt, session=None):
         date_match = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
         filing_date = date_match.group(1) if date_match else "Unknown date"
 
-        # Extract key points
-        key_points = extract_key_points(full_text)
+        # Get page count and section information
+        page_count = count_pages(full_text)
+        key_points, section_count = extract_key_points(full_text)
 
         # Create a concise summary in markdown format
         summary = f"""## {bill_ref}
 **Filed:** {filing_date}  
-**Sponsor:** {sponsor}
+**Sponsor:** {sponsor_title} {sponsor_name}  
+**Length:** {page_count} page{'s' if page_count != 1 else ''}, {section_count} section{'s' if section_count != 1 else ''}  
+**Status:** [View latest bill status and history]({bill_status_url})
 
-### Purpose
-{title}
+### Summary
+This bill aims to {title.lower()}
 
 ### Key Points
 """
-        # Add key points with bullet points, ensuring each starts on a new line
+        # Add key points with bullet points
         if key_points:
             summary += '\n'.join(f"* {point}" for point in key_points)
         else:
@@ -801,7 +854,11 @@ def init_config_options():
             for bill in recent_bills:
                 try:
                     if bill and 'SOURCE_FILE' in bill:
-                        bill_name = get_row_value(bill, 'SOURCE_FILE').replace('.pdf', '')
+                        bill_name = get_row_value(bill, 'SOURCE_FILE')
+                        if bill_name:
+                            bill_name = bill_name.replace('.pdf', '')
+                        else:
+                            bill_name = 'Unknown Bill'
                         subtitle = get_row_value(bill, 'BILL_SUBTITLE') if 'BILL_SUBTITLE' in bill else 'No subtitle available'
                         sponsor = get_row_value(bill, 'BILL_SPONSOR') if 'BILL_SPONSOR' in bill else 'Unknown'
                         date_filed = get_row_value(bill, 'DATE_FILED') if 'DATE_FILED' in bill else None
