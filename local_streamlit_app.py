@@ -546,122 +546,6 @@ def format_bill_header(bill_name, bill_info):
     
     return "\n\n".join(header_parts)
 
-
-
-def get_bill_url(bill_name):
-    """Generate URL for a bill"""
-    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}"
-
-def format_bill_reference(bill_name):
-    """Format a bill reference with its URL"""
-    url = get_bill_url(bill_name)
-    return f"[{bill_name}]({url})"
-
-def get_bill_status_url(bill_name):
-    """Generate URL for a bill's status page"""
-    # Convert to lowercase - bill_name should already be clean of .pdf
-    bill_name = bill_name.lower()
-    return f"https://arkleg.state.ar.us/Bills/Detail?id={bill_name}&ddBienniumSession=2025%2F2025R&Search="
-
-def get_chat_history():
-    """Get chat history"""
-    start_index = max(
-        0, len(st.session_state.messages) - st.session_state.num_chat_messages
-    )
-    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
-
-def create_prompt(user_question):
-    """Create prompt for the language model"""
-    # Get current bill statistics
-    bill_stats = get_bill_stats(session)
-    
-    if st.session_state.use_chat_history:
-        chat_history = get_chat_history()
-        if chat_history != []:
-            prompt_context, results = query_cortex_search_service(
-                user_question,
-                columns=["chunk", "source_file"],
-                filter={}
-            )
-        else:
-            prompt_context, results = query_cortex_search_service(
-                user_question,
-                columns=["chunk", "source_file"],
-                filter={}
-            )
-            chat_history = ""
-
-    # Process context to include bill links
-    processed_context = prompt_context
-    if results:
-        for result in results:
-            if 'SOURCE_FILE' in result:
-                bill_name = get_row_value(result, 'SOURCE_FILE')
-                if bill_name:
-                    bill_name = bill_name.replace('.pdf', '')
-                else:
-                    bill_name = 'Unknown Bill'
-                bill_ref = format_bill_reference(bill_name)
-                processed_context = processed_context.replace(bill_name, bill_ref)
-
-    prompt = f"""
-            [INST]
-            You are a helpful AI assistant specifically focused on Arkansas legislative bills filed for the 2025 session. 
-            Your purpose is to help users understand and navigate these bills. You provide summaries of bills and information about the bill filing.
-
-            Current Bill Statistics:
-            - Total Bills Filed: {bill_stats['total_bills']}
-            - Latest Filing Date: {bill_stats['latest_file_date']}
-
-            IMPORTANT RESPONSE GUIDELINES:
-            1. ONLY answer questions about Arkansas legislative bills for the 2025 session
-            2. If a user asks about:
-               - Bills from other states
-               - Federal legislation
-               - Past Arkansas sessions
-               - Any non-legislative topics
-               Respond with: "I'm specifically designed to help with Arkansas legislative bills for the 2025 session. That topic is outside my scope. 
-               Would you like to know:
-               - How many bills have been filed so far?
-               - What bills were filed this week?
-               - Information about a specific bill?"
-            3. For valid questions, use the context provided between <context> tags and chat history between <chat_history> tags
-            4. Never say "according to the provided context" or similar phrases
-            5. For questions about bill counts or statistics, use the Current Bill Statistics provided above
-            6. If you can't find information about a specific bill in the context, say "I don't have information about that specific bill in my current database."
-            7. When referring to bills, use the markdown link format provided in the context. For example: [SB1](URL)
-            8. When asked about bill sponsors, check the bill_sponsor metadata field in the context. If available, format the response as "The bill is sponsored by [Sponsor Name]"
-            9. For questions about bill types:
-               - Files with 'HB' in the name are House Bills (filed in the House of Representatives)
-               - Files with 'SB' in the name are Senate Bills (filed in the Senate)
-            10. When asked about bills without a specific bill number:
-                - For general queries like "tell me about a house bill" or "recent senate bill", look at the source_file names in the context
-                - Prioritize the most recently filed bills (check date_filed metadata)
-                - Include the bill type (House/Senate), bill number, sponsor, and a brief summary from the context
-                - Example response: "Here's a recent House Bill: [HB1234](URL) filed on [date]. The bill is sponsored by [Sponsor Name] and it [brief summary of the bill's purpose]"
-            11. Response Style:
-                - Always respond in clear, professional English
-                - Be polite and courteous
-                - Keep responses concise and to the point
-                - Focus on factual information without editorializing
-                - Use proper grammar and punctuation
-
-            <chat_history>
-            {chat_history}
-            </chat_history>
-            <context>
-            {processed_context}
-            </context>
-            <question>
-            {user_question}
-            </question>
-            [/INST]
-            Answer:
-            """
-    return prompt, results
-
-import re
-
 def clean_text(text):
     """Clean up extracted text by removing line numbers and extra whitespace."""
     # Remove line numbers and extra whitespace
@@ -809,8 +693,9 @@ def complete(prompt, session=None):
         sponsor_title = sponsor_match.group(1) if sponsor_match else "Legislator"
         sponsor_name = sponsor_match.group(2) if sponsor_match else "Unknown"
         
-        title_match = re.search(r'AN ACT (?:TO|FOR)\s+(.*?)(?:\.|;|\d)', full_text, re.DOTALL)
-        title = title_match.group(1).strip() if title_match else ""
+        # Extract and clean the title
+        title_match = re.search(r'AN ACT (?:TO|FOR)\s+(.*?)(?=(?:\.|;|\d|SECTION|BE IT ENACTED))', full_text, re.DOTALL | re.IGNORECASE)
+        title = clean_title(title_match.group(1).strip()) if title_match else ""
         
         date_match = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
         filing_date = date_match.group(1) if date_match else "Unknown date"
@@ -843,6 +728,183 @@ This bill aims to {title.lower()}
         error_msg = f"Error in language model completion: {str(e)}"
         st.error(error_msg)
         return error_msg
+
+def clean_title(title):
+    """Clean and format the bill title."""
+    # Remove line numbers and extra whitespace
+    title = re.sub(r'\s*\d+\s*(?=\S)', ' ', title)
+    # Clean up extra whitespace
+    title = ' '.join(title.split())
+    # Ensure the title ends with proper punctuation
+    if title and not title.endswith(('.', ';')):
+        next_sentence = title.split('.')[0]
+        if next_sentence:
+            title = next_sentence.strip() + '.'
+    return title
+
+def clean_section_content(content):
+    """Clean section content for better readability."""
+    # Remove line numbers and timestamps
+    content = re.sub(r'\s*\d+\s*(?=\S)', ' ', content)
+    content = re.sub(r'(?i)(?:sb|hb)\d+\s+\d+\s+\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}:\d{2}\s*(?:am|pm)?', '', content)
+    
+    # Clean up parentheses formatting
+    content = re.sub(r'\(\s*\)', '()', content)
+    content = re.sub(r'\s+\)', ')', content)
+    content = re.sub(r'\(\s+', '(', content)
+    
+    # Fix spacing around punctuation
+    content = re.sub(r'\s+([.,;:])', r'\1', content)
+    
+    # Remove repeated whitespace
+    content = ' '.join(content.split())
+    
+    # Capitalize first letter if it's not already
+    if content and not content[0].isupper():
+        content = content[0].upper() + content[1:]
+    
+    return content
+
+def extract_sections(full_text):
+    """Extract and analyze bill sections."""
+    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+)', full_text)
+    section_info = []
+    
+    for section in sections:
+        section_num = section.group(1)
+        title = section.group(2) if section.group(2) else None
+        content = clean_section_content(section.group(3))
+        
+        if content and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
+            # Convert legal language to more natural language
+            content = content.lower()
+            content = re.sub(r'shall', 'will', content)
+            content = re.sub(r'pursuant to', 'according to', content)
+            content = re.sub(r'hereby', '', content)
+            content = re.sub(r'therein|thereof|thereto', 'in it', content)
+            content = re.sub(r'wherein', 'where', content)
+            content = re.sub(r'deemed', 'considered', content)
+            content = content.capitalize()
+            
+            section_info.append({
+                'number': section_num,
+                'title': title,
+                'content': content
+            })
+    
+    return section_info
+
+def get_bill_url(bill_name):
+    """Generate URL for a bill"""
+    return f"https://arkleg.state.ar.us/Home/FTPDocument?path=%2FBills%2F2025R%2FPublic%2F{bill_name}"
+
+def format_bill_reference(bill_name):
+    """Format a bill reference with its URL"""
+    url = get_bill_url(bill_name)
+    return f"[{bill_name}]({url})"
+
+def get_bill_status_url(bill_name):
+    """Generate URL for a bill's status page"""
+    # Convert to lowercase - bill_name should already be clean of .pdf
+    bill_name = bill_name.lower()
+    return f"https://arkleg.state.ar.us/Bills/Detail?id={bill_name}&ddBienniumSession=2025%2F2025R&Search="
+
+def get_chat_history():
+    """Get chat history"""
+    start_index = max(
+        0, len(st.session_state.messages) - st.session_state.num_chat_messages
+    )
+    return st.session_state.messages[start_index : len(st.session_state.messages) - 1]
+
+def create_prompt(user_question):
+    """Create prompt for the language model"""
+    # Get current bill statistics
+    bill_stats = get_bill_stats(session)
+    
+    if st.session_state.use_chat_history:
+        chat_history = get_chat_history()
+        if chat_history != []:
+            prompt_context, results = query_cortex_search_service(
+                user_question,
+                columns=["chunk", "source_file"],
+                filter={}
+            )
+        else:
+            prompt_context, results = query_cortex_search_service(
+                user_question,
+                columns=["chunk", "source_file"],
+                filter={}
+            )
+            chat_history = ""
+
+    # Process context to include bill links
+    processed_context = prompt_context
+    if results:
+        for result in results:
+            if 'SOURCE_FILE' in result:
+                bill_name = get_row_value(result, 'SOURCE_FILE')
+                if bill_name:
+                    bill_name = bill_name.replace('.pdf', '')
+                else:
+                    bill_name = 'Unknown Bill'
+                bill_ref = format_bill_reference(bill_name)
+                processed_context = processed_context.replace(bill_name, bill_ref)
+
+    prompt = f"""
+            [INST]
+            You are a helpful AI assistant specifically focused on Arkansas legislative bills filed for the 2025 session. 
+            Your purpose is to help users understand and navigate these bills. You provide summaries of bills and information about the bill filing.
+
+            Current Bill Statistics:
+            - Total Bills Filed: {bill_stats['total_bills']}
+            - Latest Filing Date: {bill_stats['latest_file_date']}
+
+            IMPORTANT RESPONSE GUIDELINES:
+            1. ONLY answer questions about Arkansas legislative bills for the 2025 session
+            2. If a user asks about:
+               - Bills from other states
+               - Federal legislation
+               - Past Arkansas sessions
+               - Any non-legislative topics
+               Respond with: "I'm specifically designed to help with Arkansas legislative bills for the 2025 session. That topic is outside my scope. 
+               Would you like to know:
+               - How many bills have been filed so far?
+               - What bills were filed this week?
+               - Information about a specific bill?"
+            3. For valid questions, use the context provided between <context> tags and chat history between <chat_history> tags
+            4. Never say "according to the provided context" or similar phrases
+            5. For questions about bill counts or statistics, use the Current Bill Statistics provided above
+            6. If you can't find information about a specific bill in the context, say "I don't have information about that specific bill in my current database."
+            7. When referring to bills, use the markdown link format provided in the context. For example: [SB1](URL)
+            8. When asked about bill sponsors, check the bill_sponsor metadata field in the context. If available, format the response as "The bill is sponsored by [Sponsor Name]"
+            9. For questions about bill types:
+               - Files with 'HB' in the name are House Bills (filed in the House of Representatives)
+               - Files with 'SB' in the name are Senate Bills (filed in the Senate)
+            10. When asked about bills without a specific bill number:
+                - For general queries like "tell me about a house bill" or "recent senate bill", look at the source_file names in the context
+                - Prioritize the most recently filed bills (check date_filed metadata)
+                - Include the bill type (House/Senate), bill number, sponsor, and a brief summary from the context
+                - Example response: "Here's a recent House Bill: [HB1234](URL) filed on [date]. The bill is sponsored by [Sponsor Name] and it [brief summary of the bill's purpose]"
+            11. Response Style:
+                - Always respond in clear, professional English
+                - Be polite and courteous
+                - Keep responses concise and to the point
+                - Focus on factual information without editorializing
+                - Use proper grammar and punctuation
+
+            <chat_history>
+            {chat_history}
+            </chat_history>
+            <context>
+            {processed_context}
+            </context>
+            <question>
+            {user_question}
+            </question>
+            [/INST]
+            Answer:
+            """
+    return prompt, results
 
 def init_config_options():
     """Initialize configuration options in sidebar"""
