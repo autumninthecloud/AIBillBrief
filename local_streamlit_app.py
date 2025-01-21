@@ -665,6 +665,10 @@ def clean_section_content(content):
     
     # Clean up parentheses formatting
     content = re.sub(r'\(\s*\)', '()', content)
+    content = re.sub(r'\s+\)', ')', content)
+    content = re.sub(r'\(\s+', '(', content)
+    
+    # Fix spacing around punctuation
     content = re.sub(r'\s+([.,;:])', r'\1', content)
     
     # Clean up Arkansas Code citations
@@ -673,14 +677,21 @@ def clean_section_content(content):
     # Bold dates (various formats)
     content = re.sub(r'(\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b)', r'**\1**', content, flags=re.IGNORECASE)
     content = re.sub(r'(\b\d{1,2}/\d{1,2}/\d{4}\b)', r'**\1**', content)
-    content = re.sub(r'(\b\d{4}-\d{2}-\d{2}\b)', r'**\1**', content)
     
-    # Bold financial amounts (with optional decimals and various currency formats)
+    # Bold financial amounts
     content = re.sub(r'(\$\s*\d+(?:,\d{3})*(?:\.\d{2})?(?:\s*(?:million|billion|trillion))?)', r'**\1**', content, flags=re.IGNORECASE)
-    content = re.sub(r'(\b\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars?|USD)\b)', r'**\1**', content, flags=re.IGNORECASE)
     
     # Remove repeated whitespace
     content = ' '.join(content.split())
+    
+    # Convert legal language to more natural language
+    content = content.lower()
+    content = re.sub(r'shall', 'will', content)
+    content = re.sub(r'pursuant to', 'according to', content)
+    content = re.sub(r'hereby', '', content)
+    content = re.sub(r'therein|thereof|thereto', 'in it', content)
+    content = re.sub(r'wherein', 'where', content)
+    content = re.sub(r'deemed', 'considered', content)
     
     # Capitalize first letter if it's not already
     if content and not content[0].isupper():
