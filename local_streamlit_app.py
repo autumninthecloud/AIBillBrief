@@ -666,6 +666,54 @@ def clean_text(text):
     cleaned = ' '.join(cleaned.split())
     return cleaned
 
+def extract_key_points(full_text):
+    """Extract meaningful key points from bill text."""
+    key_points = []
+    
+    # Look for appropriation amounts
+    money_matches = re.finditer(r'\$\s*([\d,]+(?:\.\d{2})?)', full_text)
+    for match in money_matches:
+        amount = match.group(1)
+        surrounding_text = full_text[max(0, match.start() - 100):match.end() + 100]
+        purpose = re.search(r'(?:for|to)\s+([^\.]+)', surrounding_text)
+        if purpose:
+            key_points.append(f"Appropriates ${amount} {purpose.group(1).strip()}")
+
+    # Look for date ranges
+    date_range = re.search(r'in effect (?:only )?from (.*?) through (.*?)\.', full_text)
+    if date_range:
+        key_points.append(f"Effective period: {date_range.group(1)} through {date_range.group(2)}")
+
+    # Look for main sections and their content
+    sections = re.finditer(r'SECTION\s+\d+\.(?:\s+[A-Z][^\.]+\.)?\s+([^\.]+)', full_text)
+    for section in sections:
+        content = clean_text(section.group(1))
+        if len(content) > 20 and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
+            key_points.append(content.capitalize())
+
+    # Look for specific actions or requirements
+    action_patterns = [
+        r'(?:shall|must)\s+([^\.]+)',
+        r'(?:is|are)\s+(?:required|prohibited|authorized)\s+to\s+([^\.]+)',
+        r'(?:may not|shall not)\s+([^\.]+)'
+    ]
+    
+    for pattern in action_patterns:
+        matches = re.finditer(pattern, full_text)
+        for match in matches:
+            action = clean_text(match.group(1))
+            if (len(action) > 20 and 
+                not any(x in action.lower() for x in ['this act', 'read as follows', 'section']) and
+                not re.search(r'^\d', action)):
+                key_points.append(action.capitalize())
+
+    # Remove duplicates while preserving order
+    seen = set()
+    key_points = [x for x in key_points if not (x.lower() in seen or seen.add(x.lower()))]
+
+    # Limit to most important points
+    return key_points[:5]
+
 def complete(prompt, session=None):
     """Generate completion using Cortex Search Service."""
     try:
@@ -716,32 +764,8 @@ def complete(prompt, session=None):
         date_match = re.search(r'(\d{2}/\d{2}/\d{4})', full_text)
         filing_date = date_match.group(1) if date_match else "Unknown date"
 
-        # Extract key points based on bill sections
-        key_points = []
-        
-        # Look for appropriation amounts
-        money_match = re.search(r'\$\s*([\d,]+(?:\.\d{2})?)', full_text)
-        if money_match:
-            amount = money_match.group(1)
-            key_points.append(f"Appropriates ${amount}")
-
-        # Look for date ranges
-        date_range = re.search(r'in effect (?:only )?from (.*?) through (.*?)\.', full_text)
-        if date_range:
-            key_points.append(f"Effective period: {date_range.group(1)} through {date_range.group(2)}")
-
-        # Check for emergency clause
-        if 'EMERGENCY CLAUSE' in full_text:
-            key_points.append("Contains an emergency clause for immediate effect upon approval")
-
-        # Look for main actions in the bill
-        action_matches = re.finditer(r'(?:shall|to)\s+([^\.]+?)(?:\.|;|\n)', full_text)
-        for match in action_matches:
-            action = clean_text(match.group(1).strip())
-            if len(action) > 20 and 'this act' not in action.lower():  # Filter out common legal phrases
-                key_points.append(action.capitalize())
-                if len(key_points) >= 5:  # Limit to most important points
-                    break
+        # Extract key points
+        key_points = extract_key_points(full_text)
 
         # Create a concise summary in markdown format
         summary = f"""## {bill_ref}
