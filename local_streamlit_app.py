@@ -656,6 +656,16 @@ def create_prompt(user_question):
 
 import re
 
+def clean_text(text):
+    """Clean up extracted text by removing line numbers and extra whitespace."""
+    # Remove line numbers and extra whitespace
+    cleaned = re.sub(r'\s*\d+\s*(?=\S)', ' ', text)
+    # Remove page numbers and timestamps
+    cleaned = re.sub(r'(?i)(?:sb|hb)\d+\s+\d+\s+\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}:\d{2}\s*(?:am|pm)?', '', cleaned)
+    # Clean up extra whitespace
+    cleaned = ' '.join(cleaned.split())
+    return cleaned
+
 def complete(prompt, session=None):
     """Generate completion using Cortex Search Service."""
     try:
@@ -727,24 +737,27 @@ def complete(prompt, session=None):
         # Look for main actions in the bill
         action_matches = re.finditer(r'(?:shall|to)\s+([^\.]+?)(?:\.|;|\n)', full_text)
         for match in action_matches:
-            action = match.group(1).strip()
+            action = clean_text(match.group(1).strip())
             if len(action) > 20 and 'this act' not in action.lower():  # Filter out common legal phrases
                 key_points.append(action.capitalize())
                 if len(key_points) >= 5:  # Limit to most important points
                     break
 
-        # Create a concise summary
-        summary = f"""{bill_ref} was filed on {filing_date} by {sponsor}.
+        # Create a concise summary in markdown format
+        summary = f"""## {bill_ref}
+**Filed:** {filing_date}  
+**Sponsor:** {sponsor}
 
-Purpose: {title}
+### Purpose
+{title}
 
-Key Points:
+### Key Points
 """
         # Add key points with bullet points, ensuring each starts on a new line
         if key_points:
-            summary += '\n'.join(f"• {point}" for point in key_points)
+            summary += '\n'.join(f"* {point}" for point in key_points)
         else:
-            summary += "• No additional key points found"
+            summary += "* No additional key points found"
 
         return summary.strip()
 
