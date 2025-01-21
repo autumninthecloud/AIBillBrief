@@ -2,22 +2,16 @@
 
 AI Bill Brief is a revolutionary tool that democratizes access to legislative information by combining the power of Snowflake, Mistral LLM, and advanced AI technologies. This application transforms complex legislative bills into easily digestible insights, making civic engagement more accessible to everyone.
 
-## Impact & Outcomes
-
-- **Accessibility**: Simplifies complex legislative language for the general public, making bills and policies understandable to all citizens
-- **Efficiency**: Reduces the time required to understand proposed bills and policies through AI-powered summaries and natural language queries
-- **Transparency**: Encourages informed civic engagement by making legislative data more accessible and understandable
-- **Democratic Participation**: Empowers citizens to actively participate in the legislative process by better understanding the laws that affect them
-
 ## About
 
-This project was created for the [RAG 'n' ROLL: Amp up Search with Snowflake & Mistral hackathon](https://snowflake-mistral-rag.devpost.com/) on DevPost. The hackathon challenges developers to build innovative Retrieval Augmented Generation (RAG) applications using:
+This project was created for the [RAG 'n' ROLL: Amp up Search with Snowflake & Mistral hackathon](https://snowflake-mistral-rag.devpost.com/) on DevPost. The hackathon challenges developers to build innovative Retrieval Augmented Generation (RAG) applications using Snowflake Cortex Search for retrieval, Mistral LLM on Snowflake Cortex for generation, and Streamlit Community Cloud for the frontend.
 
-- Cortex Search for retrieval
-- Mistral LLM (mistral-large2) on Snowflake Cortex for generation
-- Streamlit Community Cloud for front end
+## Impact & Outcomes
 
-The competition aims to push the boundaries of AI technology and showcase how RAG applications can revolutionize information interaction, with $10,000 in prizes available for innovative solutions.
+- **Accessibility**: Simplifies complex legislative language for the general public
+- **Efficiency**: Reduces the time required to understand proposed bills through AI-powered summaries
+- **Transparency**: Encourages informed civic engagement by making legislative data more accessible
+- **Democratic Participation**: Empowers citizens to actively participate in the legislative process
 
 ## Features
 
@@ -27,30 +21,27 @@ The competition aims to push the boundaries of AI technology and showcase how RA
   - Efficient chunking for better context retrieval
 
 - **AI-Powered Search**: 
-  - Uses Snowflake's Cortex framework for intelligent document search
-  - Context-aware retrieval for more relevant results
+  - Context-aware retrieval using Snowflake's Cortex framework
+  - Natural language bill queries
   - Maintains chat history for better conversation flow
 
 - **Modern UI/UX**:
-  - Clean, modern interface with custom styling
-  - Centered chat input for better usability
-  - Responsive design with proper spacing
+  - Clean, responsive interface with custom styling
   - Light purple theme with white chat containers
+  - Centered chat input for better usability
 
 - **Advanced Features**:
-  - Natural language bill queries
   - Configurable model selection
   - Adjustable context chunks
   - Debug mode for development
 
 ## Technology Stack
 
-This project implements the hackathon's required technology stack:
-- **Retrieval**: Snowflake Cortex Search for efficient document retrieval
-- **Generation**: Mistral LLM (mistral-large2) on Snowflake Cortex for natural language processing
-- **Frontend**: Streamlit for an interactive and user-friendly interface
-- **Data Processing**: PyPDF2 and langchain for PDF processing
-- **Database**: Snowflake for secure and scalable data storage
+- **Retrieval**: Snowflake Cortex Search
+- **Generation**: Mistral LLM (mistral-large2) on Snowflake Cortex
+- **Frontend**: Streamlit
+- **Data Processing**: PyPDF2 and langchain
+- **Database**: Snowflake
 
 ## Prerequisites
 
@@ -74,7 +65,7 @@ pip install -r requirements.txt
 
 3. Set up environment variables:
    - Copy `.env.example` to `.env`
-   - Fill in your Snowflake credentials in the `.env` file:
+   - Fill in your Snowflake credentials:
 ```bash
 SNOWFLAKE_ACCOUNT=<your-account-identifier>
 SNOWFLAKE_USER=<your-username>
@@ -91,57 +82,32 @@ SNOWFLAKE_SCHEMA=<your-schema>
 
 ## Usage
 
-1. Ensure all prerequisites are met and assets are in place
-
-2. Run the Streamlit application:
+1. Run the Streamlit application:
 ```bash
 streamlit run local_streamlit_app.py
 ```
 
-3. Use the web interface to:
+2. Use the web interface to:
    - Search through bill contents
-   - Ask questions about specific bills (e.g., "Tell me about Senate Bill 8")
-   - Find bills by sponsor (e.g., "What bills has Senator Payton filed?")
-   - Browse recent bills (e.g., "Show me a recent House Bill")
+   - Ask questions about specific bills
+   - Find bills by sponsor
+   - Browse recent bills
    - Get AI-powered insights using natural language queries
 
 ## Project Structure
 
-- `local_streamlit_app.py`: Main Streamlit application with UI and LLM integration
+- `local_streamlit_app.py`: Main Streamlit application
 - `local_pdf_processor.py`: PDF processing and metadata extraction
 - `requirements.txt`: Python dependencies
 - `.env.example`: Template for environment variables
 - `bills/`: Directory for PDF files
 - `csv_files/`: Output directory for processed files
 
-## Dependencies
-
-Key Python packages:
-- streamlit
-- snowflake-connector-python
-- snowflake-snowpark-python
-- snowflake-cortex
-- PyPDF2
-- langchain
-- pandas
-- python-dotenv
-
-## Development
-
-This project was developed as part of the RAG 'n' ROLL hackathon (December 2023 - January 2024) and follows the competition's technical requirements:
-
-1. Uses Snowflake Cortex Search for efficient document retrieval
-2. Implements Mistral LLM (mistral-large2) for natural language processing
-3. Provides a user interface through Streamlit Community Cloud
-4. Focuses on Retrieval Augmented Generation (RAG) for enhanced search capabilities
-
-The application demonstrates how RAG can be used to make legislative documents more accessible and understandable through AI-powered search and analysis.
-
 ## Security
 
 - Sensitive credentials are managed through environment variables
-- The `.env` file containing actual credentials is ignored by git
-- Use `.env.example` as a template for setting up your own credentials
+- The `.env` file containing credentials is ignored by git
+- Use `.env.example` as a template for setup
 
 ## Contributing
 
@@ -160,4 +126,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Built with Snowflake's Cortex framework
 - Powered by Streamlit
 - PDF processing with pdfplumber
-- Natural language processing powered by Mistral AI's large language models
+- Natural language processing by Mistral AI
