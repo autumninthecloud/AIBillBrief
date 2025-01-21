@@ -1098,6 +1098,8 @@ def init_sidebar():
         - "What's the latest SB?"
         
         ### Tips 💡
+        - Senate Bills start with "SB"
+        - House Bills start with "HB"
         - Be specific with bill numbers (e.g., "SB8" or "HB1056")
         - You can ask about sponsors using their names
         - Request recent bills by type (House or Senate)
