@@ -596,25 +596,30 @@ def count_pages(full_text):
 
 def extract_sections(full_text):
     """Extract and analyze bill sections."""
-    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([^\.]+?)\.)?(?:\s+([^\.]+?)(?=(?:SECTION \d+|\Z)))', full_text, re.DOTALL | re.IGNORECASE)
+    sections = re.finditer(r'SECTION\s+(\d+)\.(?:\s+([A-Z][^\.]+)\.)?\s+([^\.]+)', full_text)
     section_info = []
     
     for section in sections:
         section_num = section.group(1)
         title = section.group(2) if section.group(2) else None
-        content = section.group(3) if section.group(3) else ""
+        content = clean_text(section.group(3))
         
-        # Skip common boilerplate sections
-        if content and not any(x in content.lower() for x in ['be it enacted', 'read as follows']):
-            # Clean and format the content
-            content = clean_section_content(content)
+        if content and not any(content.lower().startswith(x) for x in ['be it enacted', 'read as follows']):
+            # Convert legal language to more natural language
+            content = content.lower()
+            content = re.sub(r'shall', 'will', content)
+            content = re.sub(r'pursuant to', 'according to', content)
+            content = re.sub(r'hereby', '', content)
+            content = re.sub(r'therein|thereof|thereto', 'in it', content)
+            content = re.sub(r'wherein', 'where', content)
+            content = re.sub(r'deemed', 'considered', content)
+            content = content.capitalize()
             
-            if content:  # Only add if we have meaningful content
-                section_info.append({
-                    'number': section_num,
-                    'title': title,
-                    'content': content
-                })
+            section_info.append({
+                'number': section_num,
+                'title': title,
+                'content': content
+            })
     
     return section_info
 
@@ -622,40 +627,57 @@ def extract_key_points(full_text):
     """Extract meaningful key points from bill text."""
     key_points = []
     section_info = extract_sections(full_text)
-    section_count = len(section_info)
     
-    # Add section summaries if available
-    if section_info:
-        for section in section_info:
-            if section['title']:
-                point = f"**Section {section['number']}** ({section['title'].title()}): {section['content']}"
-            else:
-                point = f"**Section {section['number']}**: {section['content']}"
-            key_points.append(point)
-    else:
-        # If no sections found, try to extract key actions
-        matches = re.finditer(r'(?:to|will|shall)\s+([^;\.]+)[;\.]', full_text, re.IGNORECASE)
+    # Add section summaries
+    for section in section_info:
+        if section['title']:
+            point = f"**Section {section['number']}** ({section['title'].title()}): {section['content']}"
+        else:
+            point = f"**Section {section['number']}**: {section['content']}"
+        key_points.append(point)
+    
+    # Look for appropriation amounts
+    money_matches = re.finditer(r'\$\s*([\d,]+(?:\.\d{2})?)', full_text)
+    for match in money_matches:
+        amount = match.group(1)
+        surrounding_text = full_text[max(0, match.start() - 100):match.end() + 100]
+        purpose = re.search(r'(?:for|to)\s+([^\.]+)', surrounding_text)
+        if purpose:
+            purpose_text = purpose.group(1).strip().lower()
+            purpose_text = re.sub(r'shall', 'will', purpose_text)
+            key_points.append(f"Allocates ${amount} to {purpose_text}")
+
+    # Look for date ranges
+    date_range = re.search(r'in effect (?:only )?from (.*?) through (.*?)\.', full_text)
+    if date_range:
+        key_points.append(f"This bill will be active from {date_range.group(1)} through {date_range.group(2)}")
+
+    # Look for specific actions or requirements
+    action_patterns = [
+        (r'(?:shall|must)\s+([^\.]+)', 'will'),
+        (r'(?:is|are)\s+(?:required|prohibited|authorized)\s+to\s+([^\.]+)', 'must'),
+        (r'(?:may not|shall not)\s+([^\.]+)', 'cannot')
+    ]
+    
+    for pattern, replacement in action_patterns:
+        matches = re.finditer(pattern, full_text)
         for match in matches:
             action = clean_text(match.group(1))
             if (len(action) > 20 and 
-                not any(action.lower().startswith(x) for x in ['this act', 'read as follows', 'section']) and
+                not any(x in action.lower() for x in ['this act', 'read as follows', 'section']) and
                 not re.search(r'^\d', action)):
-                
-                # Convert to more natural language
                 action = action.lower()
-                action = re.sub(r'shall|must', 'will', action)
+                action = re.sub(r'shall|must', replacement, action)
                 action = re.sub(r'pursuant to', 'according to', action)
                 action = re.sub(r'hereby', '', action)
-                action = re.sub(r'therein|thereof|thereto', 'in it', action)
-                action = re.sub(r'wherein', 'where', action)
-                action = re.sub(r'deemed', 'considered', action)
                 action = action.capitalize()
-                
-                # Bold any dates or financial amounts
-                action = clean_section_content(action)
                 key_points.append(action)
-    
-    return key_points, section_count
+
+    # Remove duplicates while preserving order
+    seen = set()
+    key_points = [x for x in key_points if not (x.lower() in seen or seen.add(x.lower()))]
+
+    return key_points, len(section_info)
 
 def clean_section_content(content):
     """Clean section content for better readability."""
@@ -665,10 +687,6 @@ def clean_section_content(content):
     
     # Clean up parentheses formatting
     content = re.sub(r'\(\s*\)', '()', content)
-    content = re.sub(r'\s+\)', ')', content)
-    content = re.sub(r'\(\s+', '(', content)
-    
-    # Fix spacing around punctuation
     content = re.sub(r'\s+([.,;:])', r'\1', content)
     
     # Clean up Arkansas Code citations
