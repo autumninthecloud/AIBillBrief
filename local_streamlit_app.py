@@ -1113,17 +1113,17 @@ def init_sidebar():
         
         st.divider()
         
-        # Debug mode toggle
-        st.session_state.debug = st.checkbox("Debug Mode", value=False)
+        # Debug mode toggle - uncomment for troubleshooting
+        #st.session_state.debug = st.checkbox("Debug Mode", value=False)
         
-        # Number of chunks slider
-        st.session_state.num_retrieved_chunks = st.slider(
-            "Max Chunks Retrieved",
-            min_value=1,
-            max_value=10,
-            value=5,
-            help="Maximum number of text chunks to retrieve per query"
-        )
+        # Number of chunks slider - uncomment for troubleshooting
+        #st.session_state.num_retrieved_chunks = st.slider(
+        #    "Max Chunks Retrieved",
+        #    min_value=1,
+        #    max_value=10,
+        #    value=5,
+        #    help="Maximum number of text chunks to retrieve per query"
+        #)
 
 def load_bills_to_snowflake():
     """
